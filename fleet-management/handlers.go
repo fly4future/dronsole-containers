@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tiiuae/gosshgit"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
 )
 
@@ -35,7 +37,6 @@ type Fleet struct {
 	WifiSSID         string
 	GitServer        gosshgit.Server
 	GitSSHServerPort int
-	GitSSHServerKey  []byte
 	GitShutdown      func()
 }
 
@@ -131,7 +132,6 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 		WifiSSID:         uuid.New().String(),
 		GitServer:        g,
 		GitSSHServerPort: gitPort,
-		GitSSHServerKey:  []byte("TODO"),
 	}
 
 	err = f.createInitialConfig()
@@ -148,9 +148,12 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 	fleets[slug] = f
 
 	var response struct {
-		GitPort int `json:"git_port"`
+		GitPort   int    `json:"git_port"`
+		PublicKey string `json:"public_key"`
 	}
 	response.GitPort = gitPort
+	response.PublicKey = strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(g.PublicKey())), "\n")
+
 	writeJSON(w, response)
 }
 
@@ -353,19 +356,28 @@ func handleTrustMessage(deviceID string, payload []byte) {
 
 	f.GitServer.Allow(trust.PublicSSHKey)
 
+	joinFleetPayload, err := json.Marshal(struct {
+		GitServerAddress string `json:"git_server_address"`
+		GitServerKey     string `json:"git_server_key"`
+	}{
+		GitServerAddress: fmt.Sprintf("%s:%d", "fleet-management-svc", f.GitSSHServerPort),
+		GitServerKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(f.GitServer.PublicKey())), "\n"),
+	})
+	if err != nil {
+		log.Printf("Could not marshal join-fleet payload: %v\n", err)
+		return
+	}
+
 	// ask the drone to join the fleet
 	msg, err := json.Marshal(struct {
 		Command string
-		Payload interface{}
+		Payload string
 	}{
 		Command: "join-fleet",
-		Payload: map[string]interface{}{
-			"git_server_port": f.GitSSHServerPort,
-			"git_server_key":  f.GitSSHServerKey,
-		},
+		Payload: string(joinFleetPayload),
 	})
 	if err != nil {
-		log.Printf("Could not marshal initialize-trust command: %v\n", err)
+		log.Printf("Could not marshal join-fleet command: %v\n", err)
 		return
 	}
 
