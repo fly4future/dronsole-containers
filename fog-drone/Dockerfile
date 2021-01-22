@@ -28,6 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-rtsp \
     && rm -rf /var/lib/apt/lists/*
 
+# Install git and ssh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git-core \
+    openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install MAVSDK
 RUN curl -fsSL https://github.com/mavlink/MAVSDK/releases/download/v0.34.0/mavsdk_0.34.0_ubuntu20.04_amd64.deb -o mavsdk_0.34.0_ubuntu20.04_amd64.deb \
     && dpkg -i mavsdk_0.34.0_ubuntu20.04_amd64.deb \
