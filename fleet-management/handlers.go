@@ -376,10 +376,13 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		Command: "join-fleet",
 		Payload: string(joinFleetPayload),
 	})
+
 	if err != nil {
 		log.Printf("Could not marshal join-fleet command: %v\n", err)
 		return
 	}
+
+	log.Printf("Sending join-fleet command: %s", deviceID)
 
 	pubtok := mqttClient.Publish(fmt.Sprintf("/devices/%s/commands/control", deviceID), 1, false, msg)
 	if !pubtok.WaitTimeout(time.Second * 2) {
@@ -547,19 +550,19 @@ type Task struct {
 }
 
 func (f *Fleet) addTask(c context.Context, taskType string, priority int64, payload string) error {
-	task := Task{
-		Type:     taskType,
-		Priority: priority,
-		Payload:  payload,
-	}
+	// task := Task{
+	// 	Type:     taskType,
+	// 	Priority: priority,
+	// 	Payload:  payload,
+	// }
 
-	b, err := yaml.Marshal(task)
-	if err != nil {
-		log.Printf("Could not marshal task")
-		return err
-	}
+	// b, err := yaml.Marshal(task)
+	// if err != nil {
+	// 	log.Printf("Could not marshal task")
+	// 	return err
+	// }
 
-	taskfile := fmt.Sprintf("backlog/%s.yaml", uuid.New().String())
+	// taskfile := fmt.Sprintf("backlog/%s.yaml", uuid.New().String())
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
 	repoPath := filepath.Join(f.Slug, "repositories", "fleet.git")
@@ -570,13 +573,19 @@ func (f *Fleet) addTask(c context.Context, taskType string, priority int64, payl
 		return err
 	}
 
-	_ = os.Mkdir(filepath.Join(tmpPath, "backlog"), 0644)
-
-	err = ioutil.WriteFile(filepath.Join(tmpPath, taskfile), b, 0644)
+	taskfile, err := appendMessage(tmpPath, payload)
 	if err != nil {
-		log.Printf("Could not write %s", taskfile)
+		log.Printf("%s\n\nCould not append message", out)
 		return err
 	}
+
+	// _ = os.Mkdir(filepath.Join(tmpPath, "backlog"), 0644)
+
+	// err = ioutil.WriteFile(filepath.Join(tmpPath, taskfile), b, 0644)
+	// if err != nil {
+	// 	log.Printf("Could not write %s", taskfile)
+	// 	return err
+	// }
 
 	cmd := exec.Command("git", "add", taskfile)
 	cmd.Dir = tmpPath
@@ -608,4 +617,29 @@ func (f *Fleet) addTask(c context.Context, taskType string, priority int64, payl
 	}
 
 	return nil
+}
+
+func appendMessage(repoRootPath string, message string) (string, error) {
+	timestamp := time.Now().UTC()
+	id := uuid.New().String()
+	messageType := "task-created"
+	path := filepath.Join(repoRootPath, "cloud")
+	file := filepath.Join(path, "outbox.log")
+
+	os.Mkdir(path, os.ModeDir|os.ModePerm)
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+	defer f.Close()
+
+	ts := timestamp.Format("2006-01-02 15:04:05.000")
+	content := fmt.Sprintf("%s %s %s %s\n", ts, id, messageType, message)
+	if _, err := f.WriteString(content); err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	return "cloud/outbox.log", nil
 }
