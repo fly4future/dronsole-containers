@@ -9,11 +9,11 @@ import (
 )
 
 func registerRoutes(router *httprouter.Router) {
-	router.HandlerFunc(http.MethodGet, "/fleets", getFleetsHandler)
-	router.HandlerFunc(http.MethodPost, "/fleets", createFleetHandler)
-	router.HandlerFunc(http.MethodDelete, "/fleets/:slug", deleteFleetHandler)
-	router.HandlerFunc(http.MethodPost, "/fleets/:slug/drones", addDroneToFleetHandler)
-	router.HandlerFunc(http.MethodPost, "/fleets/:slug/backlog", addTaskToBacklogHandler)
+	router.HandlerFunc(http.MethodGet, "/missions", getMissionsHandler)
+	router.HandlerFunc(http.MethodPost, "/missions", createMissionHandler)
+	router.HandlerFunc(http.MethodDelete, "/missions/:slug", deleteMissionHandler)
+	router.HandlerFunc(http.MethodPost, "/missions/:slug/drones", assignDroneToMissionHandler)
+	router.HandlerFunc(http.MethodPost, "/missions/:slug/backlog", addTaskToMissionBacklogHandler)
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {

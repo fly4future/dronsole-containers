@@ -1,4 +1,4 @@
-module github.com/tiiuae/dronsole-containers/fleet-management
+module github.com/tiiuae/dronsole-containers/mission-control
 
 go 1.14
 

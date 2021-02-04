@@ -29,7 +29,7 @@ type Drone struct {
 	PublicSSHKey string
 	IP           net.IP // TODO: should we use net.IPAddr?
 }
-type Fleet struct {
+type Mission struct {
 	Slug             string
 	Name             string
 	Drones           []*Drone
@@ -41,20 +41,20 @@ type Fleet struct {
 }
 
 var (
-	fleets map[string]*Fleet = make(map[string]*Fleet)
-	drones map[string]string = make(map[string]string)
+	missions map[string]*Mission = make(map[string]*Mission)
+	drones   map[string]string   = make(map[string]string)
 )
 
-func getFleetsHandler(w http.ResponseWriter, r *http.Request) {
-	type fleet struct {
+func getMissionsHandler(w http.ResponseWriter, r *http.Request) {
+	type mission struct {
 		Slug    string `json:"slug"`
 		Name    string `json:"name"`
 		GitPort int    `json:"git_port"`
 	}
-	response := make([]fleet, 0)
+	response := make([]mission, 0)
 
-	for slug, f := range fleets {
-		response = append(response, fleet{
+	for slug, f := range missions {
+		response = append(response, mission{
 			Slug:    slug,
 			Name:    f.Name,
 			GitPort: f.GitSSHServerPort,
@@ -63,7 +63,7 @@ func getFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-func createFleetHandler(w http.ResponseWriter, r *http.Request) {
+func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 	var requestBody struct {
 		Slug           string   `json:"slug"`
 		Name           string   `json:"name"`
@@ -80,20 +80,20 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	if len(requestBody.Slug) == 0 {
 		log.Printf("Provided slug is empty")
-		http.Error(w, "Empty fleet slug", http.StatusBadRequest)
+		http.Error(w, "Empty mission slug", http.StatusBadRequest)
 		return
 	}
 	slug := slug.Make(requestBody.Slug)
 	if slug != requestBody.Slug {
 		log.Printf("Slug generated '%s' -> '%s' did not match", requestBody.Slug, slug)
-		http.Error(w, "Invalid fleet slug", http.StatusBadRequest)
+		http.Error(w, "Invalid mission slug", http.StatusBadRequest)
 		return
 	}
 
-	f := fleets[slug]
+	f := missions[slug]
 	if f != nil {
-		log.Printf("Fleet with slug '%s' already exists", slug)
-		http.Error(w, "Fleet slug already taken", http.StatusBadRequest)
+		log.Printf("Mission with slug '%s' already exists", slug)
+		http.Error(w, "Mission slug already taken", http.StatusBadRequest)
 		return
 	}
 
@@ -106,7 +106,7 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = g.InitBareRepo("fleet.git")
+	err = g.InitBareRepo("mission.git")
 	if err != nil {
 		log.Printf("Could not initialize repository: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -125,7 +125,7 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	gitPort := gitListener.Addr().(*net.TCPAddr).Port
 
-	f = &Fleet{
+	f = &Mission{
 		Slug:             slug,
 		Name:             requestBody.Name,
 		WifiSecret:       uuid.New().String(),
@@ -139,13 +139,13 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Could not create initial config: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		g.Close()
-		g.DeleteRepo("fleet")
+		g.DeleteRepo("mission.git")
 		return
 	}
 
 	go g.Serve(gitListener)
 
-	fleets[slug] = f
+	missions[slug] = f
 
 	var response struct {
 		GitPort   int    `json:"git_port"`
@@ -157,14 +157,14 @@ func createFleetHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-func deleteFleetHandler(w http.ResponseWriter, r *http.Request) {
+func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context()
 	params := httprouter.ParamsFromContext(c)
 	slug := params.ByName("slug")
 
-	f, ok := fleets[slug]
+	f, ok := missions[slug]
 	if !ok {
-		// no such fleet
+		// no such mission
 		return
 	}
 
@@ -179,12 +179,12 @@ func deleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Could not forcefully close the server: %v", err)
 		}
 	}
-	f.GitServer.DeleteRepo("fleet")
+	f.GitServer.DeleteRepo("mission.git")
 
-	delete(fleets, slug)
+	delete(missions, slug)
 }
 
-func addDroneToFleetHandler(w http.ResponseWriter, r *http.Request) {
+func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context()
 	params := httprouter.ParamsFromContext(c)
 	slug := params.ByName("slug")
@@ -200,10 +200,10 @@ func addDroneToFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, ok := fleets[slug]
+	f, ok := missions[slug]
 	if !ok {
-		log.Printf("Unknown fleet: %s", slug)
-		http.Error(w, "Unknown fleet", http.StatusBadRequest)
+		log.Printf("Unknown mission: %s", slug)
+		http.Error(w, "Unknown mission", http.StatusBadRequest)
 		return
 	}
 
@@ -214,7 +214,7 @@ func addDroneToFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fs, ok := drones[requestBody.DeviceID]; ok {
-		log.Printf("Drone '%s' already part of fleet %s", requestBody.DeviceID, fs)
+		log.Printf("Drone '%s' already part of mission %s", requestBody.DeviceID, fs)
 		http.Error(w, "Drone already assigned", http.StatusBadRequest)
 		return
 	}
@@ -253,7 +253,7 @@ func addDroneToFleetHandler(w http.ResponseWriter, r *http.Request) {
 	drones[requestBody.DeviceID] = slug
 }
 
-func addTaskToBacklogHandler(w http.ResponseWriter, r *http.Request) {
+func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context()
 	params := httprouter.ParamsFromContext(c)
 	slug := params.ByName("slug")
@@ -271,22 +271,22 @@ func addTaskToBacklogHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, ok := fleets[slug]
+	f, ok := missions[slug]
 	if !ok {
-		log.Printf("Unknown fleet: %s", slug)
-		http.Error(w, "Unknown fleet", http.StatusBadRequest)
+		log.Printf("Unknown mission: %s", slug)
+		http.Error(w, "Unknown mission", http.StatusBadRequest)
 		return
 	}
 
 	// add task to git
-	err = f.addTask(c, requestBody.Type, requestBody.Priority, requestBody.Payload)
+	err = f.addTaskToBacklog(c, requestBody.Type, requestBody.Priority, requestBody.Payload)
 	if err != nil {
 		log.Printf("Could not add task to backlog: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	// send update to all drones in the fleet
+	// send update to all drones in the mission
 	msg, err := json.Marshal(struct {
 		Command string
 		Payload interface{}
@@ -326,12 +326,12 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		return
 	}
 
-	fleetSlug, ok := drones[deviceID]
+	missionSlug, ok := drones[deviceID]
 	if !ok {
-		log.Printf("Drone not part of any fleet")
+		log.Printf("Drone not part of any mission")
 		return
 	}
-	f := fleets[fleetSlug]
+	f := missions[missionSlug]
 	for _, d := range f.Drones {
 		if d.DeviceID != deviceID {
 			continue
@@ -356,33 +356,33 @@ func handleTrustMessage(deviceID string, payload []byte) {
 
 	f.GitServer.Allow(trust.PublicSSHKey)
 
-	joinFleetPayload, err := json.Marshal(struct {
+	joinMissionPayload, err := json.Marshal(struct {
 		GitServerAddress string `json:"git_server_address"`
 		GitServerKey     string `json:"git_server_key"`
 	}{
-		GitServerAddress: fmt.Sprintf("%s:%d", "fleet-management-svc", f.GitSSHServerPort),
+		GitServerAddress: fmt.Sprintf("%s:%d", "mission-control-svc", f.GitSSHServerPort),
 		GitServerKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(f.GitServer.PublicKey())), "\n"),
 	})
 	if err != nil {
-		log.Printf("Could not marshal join-fleet payload: %v\n", err)
+		log.Printf("Could not marshal join-mission payload: %v\n", err)
 		return
 	}
 
-	// ask the drone to join the fleet
+	// ask the drone to join the mission
 	msg, err := json.Marshal(struct {
 		Command string
 		Payload string
 	}{
-		Command: "join-fleet",
-		Payload: string(joinFleetPayload),
+		Command: "join-mission",
+		Payload: string(joinMissionPayload),
 	})
 
 	if err != nil {
-		log.Printf("Could not marshal join-fleet command: %v\n", err)
+		log.Printf("Could not marshal join-mission command: %v\n", err)
 		return
 	}
 
-	log.Printf("Sending join-fleet command: %s", deviceID)
+	log.Printf("Sending join-mission command: %s", deviceID)
 
 	pubtok := mqttClient.Publish(fmt.Sprintf("/devices/%s/commands/control", deviceID), 1, false, msg)
 	if !pubtok.WaitTimeout(time.Second * 2) {
@@ -410,7 +410,7 @@ type Config struct {
 	Drones []ConfigDrone `yaml:",omitempty"`
 }
 
-func (f *Fleet) createInitialConfig() error {
+func (f *Mission) createInitialConfig() error {
 	config := Config{}
 	config.Wifi.SSID = f.WifiSSID
 	config.Wifi.Secret = f.WifiSecret
@@ -421,7 +421,7 @@ func (f *Fleet) createInitialConfig() error {
 	}
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "fleet.git")
+	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
 
 	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
 	if err != nil {
@@ -474,7 +474,7 @@ func (f *Fleet) createInitialConfig() error {
 	return nil
 }
 
-func (f *Fleet) updateConfig() error {
+func (f *Mission) updateConfig() error {
 	config := Config{}
 	config.Wifi.SSID = f.WifiSSID
 	config.Wifi.Secret = f.WifiSecret
@@ -484,7 +484,7 @@ func (f *Fleet) updateConfig() error {
 		}
 		config.Drones = append(config.Drones, ConfigDrone{
 			Name:             d.DeviceID,
-			GitServerAddress: fmt.Sprintf("ssh://git@%s:2222/fleet.git", d.IP),
+			GitServerAddress: fmt.Sprintf("ssh://git@%s:2222/mission.git", d.IP),
 			GitServerKey:     "TODO",
 			GitClientKey:     d.PublicSSHKey,
 		})
@@ -497,7 +497,7 @@ func (f *Fleet) updateConfig() error {
 	_ = b
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "fleet.git")
+	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
 
 	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
 	if err != nil {
@@ -549,7 +549,7 @@ type Task struct {
 	Payload  string
 }
 
-func (f *Fleet) addTask(c context.Context, taskType string, priority int64, payload string) error {
+func (f *Mission) addTaskToBacklog(c context.Context, taskType string, priority int64, payload string) error {
 	// task := Task{
 	// 	Type:     taskType,
 	// 	Priority: priority,
@@ -565,7 +565,7 @@ func (f *Fleet) addTask(c context.Context, taskType string, priority int64, payl
 	// taskfile := fmt.Sprintf("backlog/%s.yaml", uuid.New().String())
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "fleet.git")
+	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
 
 	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
 	if err != nil {

@@ -16,7 +16,7 @@ var mqttClient mqtt.Client
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Println("usage: fleet-management <mqtt-broker-address>")
+		fmt.Println("usage: mission-control <mqtt-broker-address>")
 		return
 	}
 	mqttBrokerAddress := os.Args[1]
@@ -84,8 +84,8 @@ func handleMQTTEvent(deviceID string, eventTopic string, msg mqtt.Message) {
 func newMQTTClient(brokerAddress string) mqtt.Client {
 	opts := mqtt.NewClientOptions().
 		AddBroker(brokerAddress).
-		SetClientID("fleet-management").
-		SetUsername("fleet-management").
+		SetClientID("mission-control").
+		SetUsername("mission-control").
 		//SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}).
 		SetPassword("").
 		SetProtocolVersion(4) // Use MQTT 3.1.1
