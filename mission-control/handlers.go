@@ -29,6 +29,7 @@ type Drone struct {
 	PublicSSHKey string
 	IP           net.IP // TODO: should we use net.IPAddr?
 }
+
 type Mission struct {
 	Slug             string
 	Name             string
@@ -40,9 +41,16 @@ type Mission struct {
 	GitShutdown      func()
 }
 
+type BacklogItem struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Payload string `json:"payload"`
+}
+
 var (
-	missions map[string]*Mission = make(map[string]*Mission)
-	drones   map[string]string   = make(map[string]string)
+	missions map[string]*Mission       = make(map[string]*Mission)
+	drones   map[string]string         = make(map[string]string)
+	backlog  map[string][]*BacklogItem = make(map[string][]*BacklogItem)
 )
 
 func getMissionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +154,7 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 	go g.Serve(gitListener)
 
 	missions[slug] = f
+	backlog[slug] = make([]*BacklogItem, 0)
 
 	var response struct {
 		GitPort   int    `json:"git_port"`
@@ -312,6 +321,22 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 	}
+
+	blog := backlog[slug]
+	backlog[slug] = append(blog, &BacklogItem{requestBody.Type, "in-progress", requestBody.Payload})
+}
+
+func getMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
+	c := r.Context()
+	params := httprouter.ParamsFromContext(c)
+	slug := params.ByName("slug")
+	response, ok := backlog[slug]
+	if !ok {
+		log.Printf("Mission with slug '%s' not found", slug)
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, response)
 }
 
 // handle trust message from drone
