@@ -55,10 +55,10 @@ RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/ver_ssrc_rel_2
     && dpkg -i agent-protocol-splitter_1.0.0._amd64.deb \
     && rm agent-protocol-splitter_1.0.0._amd64.deb
 
-# Install communication-link
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/ver_ssrc_rel_2/communication-link_1.0.0.515985f_amd64.deb -o communication-link_1.0.0._amd64.deb\
-    && dpkg -i communication-link_1.0.0._amd64.deb \
-    && rm communication-link_1.0.0._amd64.deb
+# Install latest communication-link (from container image)
+COPY --from=ghcr.io/tiiuae/tii-communication-link-deb:latest /packages/*.deb .
+RUN dpkg -i communication-link*.deb \
+    && rm communication-link*.deb
 
 # Install mavlink-router
 RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/ver_ssrc_rel_2/mavlink-router_2.0.0.2d095f3_amd64.deb -o mavlink-router_2.0.0._amd64.deb \
