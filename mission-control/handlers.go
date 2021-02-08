@@ -86,6 +86,8 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Create mission: %s", requestBody.Slug)
+
 	if len(requestBody.Slug) == 0 {
 		log.Printf("Provided slug is empty")
 		http.Error(w, "Empty mission slug", http.StatusBadRequest)
@@ -171,6 +173,8 @@ func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 	params := httprouter.ParamsFromContext(c)
 	slug := params.ByName("slug")
 
+	log.Printf("Delete mission: %s", slug)
+
 	f, ok := missions[slug]
 	if !ok {
 		// no such mission
@@ -208,6 +212,8 @@ func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Malformed request body", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Assign drone: %s -> %s", requestBody.DeviceID, slug)
 
 	f, ok := missions[slug]
 	if !ok {
@@ -280,6 +286,8 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Add task: %s -> %s", requestBody.Type, slug)
+
 	f, ok := missions[slug]
 	if !ok {
 		log.Printf("Unknown mission: %s", slug)
@@ -288,7 +296,7 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// add task to git
-	err = f.addTaskToBacklog(c, requestBody.Type, requestBody.Priority, requestBody.Payload)
+	err = f.publishGitMessage("task-created", requestBody.Payload)
 	if err != nil {
 		log.Printf("Could not add task to backlog: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -342,6 +350,7 @@ func getMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 // handle trust message from drone
 // drone has initialized its ssh keys and is ready to be joined
 func handleTrustMessage(deviceID string, payload []byte) {
+	log.Printf("Handle trust: %s", deviceID)
 	var trust struct {
 		PublicSSHKey string `json:"public_ssh_key"`
 	}
@@ -373,9 +382,9 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		break
 	}
 	// we have a new trusted drone -> update config
-	err = f.updateConfig()
+	err = f.publishGitMessage("drone-added", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
 	if err != nil {
-		log.Printf("Could not update config: %v", err)
+		log.Printf("Could not publish git message: %v", err)
 		return
 	}
 
@@ -499,6 +508,7 @@ func (f *Mission) createInitialConfig() error {
 	return nil
 }
 
+/*
 func (f *Mission) updateConfig() error {
 	config := Config{}
 	config.Wifi.SSID = f.WifiSSID
@@ -567,6 +577,7 @@ func (f *Mission) updateConfig() error {
 
 	return nil
 }
+*/
 
 type Task struct {
 	Type     string
@@ -574,7 +585,7 @@ type Task struct {
 	Payload  string
 }
 
-func (f *Mission) addTaskToBacklog(c context.Context, taskType string, priority int64, payload string) error {
+func (f *Mission) publishGitMessage(messageType string, payload string) error {
 	// task := Task{
 	// 	Type:     taskType,
 	// 	Priority: priority,
@@ -598,7 +609,7 @@ func (f *Mission) addTaskToBacklog(c context.Context, taskType string, priority 
 		return err
 	}
 
-	taskfile, err := appendMessage(tmpPath, payload)
+	taskfile, err := appendMessage(tmpPath, messageType, payload)
 	if err != nil {
 		log.Printf("%s\n\nCould not append message", out)
 		return err
@@ -644,10 +655,9 @@ func (f *Mission) addTaskToBacklog(c context.Context, taskType string, priority 
 	return nil
 }
 
-func appendMessage(repoRootPath string, message string) (string, error) {
+func appendMessage(repoRootPath string, messageType string, message string) (string, error) {
 	timestamp := time.Now().UTC()
 	id := uuid.New().String()
-	messageType := "task-created"
 	path := filepath.Join(repoRootPath, "cloud")
 	file := filepath.Join(path, "outbox.log")
 
