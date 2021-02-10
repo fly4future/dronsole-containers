@@ -3,8 +3,8 @@ name: mqtt-server
 on:
   push:
     branches: main
-  paths:
-    - mqtt-server/**
+    paths:
+      - mqtt-server/**
 
 jobs:
   tii-mqtt-server:

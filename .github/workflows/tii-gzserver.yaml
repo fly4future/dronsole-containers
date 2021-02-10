@@ -3,8 +3,8 @@ name: gzserver
 on:
   push:
     branches: main
-  paths:
-    - gzserver/**
+    paths:
+      - gzserver/**
 
 jobs:
   tii-gzserver:

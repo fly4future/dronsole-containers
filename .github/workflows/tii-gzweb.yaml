@@ -3,8 +3,8 @@ name: gzweb
 on:
   push:
     branches: main
-  paths:
-    - gzweb/**
+    paths:
+      - gzweb/**
 
 jobs:
   tii-gzweb:

@@ -3,8 +3,8 @@ name: fog-drone
 on:
   push:
     branches: main
-  paths:
-    - fog-drone/**
+    paths:
+      - fog-drone/**
 
 jobs:
   tii-fog-drone:

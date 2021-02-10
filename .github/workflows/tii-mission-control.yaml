@@ -3,8 +3,8 @@ name: mission-control
 on:
   push:
     branches: main
-  paths:
-    - mission-control/**
+    paths:
+      - mission-control/**
 
 jobs:
   tii-mission-control:

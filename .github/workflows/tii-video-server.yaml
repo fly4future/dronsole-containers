@@ -3,8 +3,8 @@ name: video-server
 on:
   push:
     branches: main
-  paths:
-    - video-server/**
+    paths:
+      - video-server/**
 
 jobs:
   tii-video-server:
