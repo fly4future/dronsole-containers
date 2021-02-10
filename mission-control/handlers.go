@@ -42,9 +42,10 @@ type Mission struct {
 }
 
 type BacklogItem struct {
-	Type    string `json:"type"`
-	Status  string `json:"status"`
-	Payload string `json:"payload"`
+	ID      string      `json:"id"`
+	Type    string      `json:"type"`
+	Status  string      `json:"status"`
+	Payload interface{} `json:"payload"`
 }
 
 var (
@@ -274,12 +275,20 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	slug := params.ByName("slug")
 
 	var requestBody struct {
-		Type     string `json:"type"`
-		Priority int64  `json:"priority"`
-		Payload  string `json:"payload"`
+		ID       string      `json:"id"`
+		Type     string      `json:"type"`
+		Priority int64       `json:"priority"`
+		Payload  interface{} `json:"payload"`
 	}
-	err := json.NewDecoder(r.Body).Decode(&requestBody)
+
+	body, err := ioutil.ReadAll(r.Body)
 	defer r.Body.Close()
+	if err != nil {
+		log.Printf("Could not read body: %v", err)
+		http.Error(w, "", http.StatusBadRequest)
+		return
+	}
+	err = json.Unmarshal(body, &requestBody)
 	if err != nil {
 		log.Printf("Could not decode body: %v", err)
 		http.Error(w, "Malformed request body", http.StatusBadRequest)
@@ -296,7 +305,7 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// add task to git
-	err = f.publishGitMessage("task-created", requestBody.Payload)
+	err = f.publishGitMessage("task-created", string(body))
 	if err != nil {
 		log.Printf("Could not add task to backlog: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -331,7 +340,7 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	blog := backlog[slug]
-	backlog[slug] = append(blog, &BacklogItem{requestBody.Type, "in-progress", requestBody.Payload})
+	backlog[slug] = append(blog, &BacklogItem{requestBody.ID, requestBody.Type, "in-progress", requestBody.Payload})
 }
 
 func getMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
