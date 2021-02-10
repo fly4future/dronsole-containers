@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tiiuae/gosshgit"
@@ -21,6 +22,17 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
+	"nhooyr.io/websocket"
+)
+
+type websocketSubscriber struct {
+	messages        chan []byte
+	closeConnection func()
+}
+
+var (
+	websocketSubscribersMu sync.Mutex
+	websocketSubscribers   map[*websocketSubscriber]struct{} = make(map[*websocketSubscriber]struct{})
 )
 
 type Drone struct {
@@ -166,6 +178,17 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 	response.GitPort = gitPort
 	response.PublicKey = strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(g.PublicKey())), "\n")
 
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		MissionName string `json:"mission_name"`
+	}{
+		Event:       "mission-created",
+		MissionSlug: f.Slug,
+		MissionName: f.Name,
+	})
+	go publishMessage(websocketMsg)
+
 	writeJSON(w, response)
 }
 
@@ -196,6 +219,15 @@ func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 	f.GitServer.DeleteRepo("mission.git")
 
 	delete(missions, slug)
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+	}{
+		Event:       "mission-removed",
+		MissionSlug: slug,
+	})
+	go publishMessage(websocketMsg)
 }
 
 func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
@@ -267,6 +299,17 @@ func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 		IP:       net.IP{}, // will be populated when the drone gets trusted
 	})
 	drones[requestBody.DeviceID] = slug
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-assigned",
+		MissionSlug: slug,
+		DroneID:     requestBody.DeviceID,
+	})
+	go publishMessage(websocketMsg)
 }
 
 func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
@@ -341,6 +384,23 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 
 	blog := backlog[slug]
 	backlog[slug] = append(blog, &BacklogItem{requestBody.ID, requestBody.Type, "in-progress", requestBody.Payload})
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event        string      `json:"event"`
+		MissionSlug  string      `json:"mission_slug"`
+		ItemID       string      `json:"item_id"`
+		ItemType     string      `json:"item_type"`
+		ItemPriority int64       `json:"item_priority"`
+		ItemPayload  interface{} `json:"item_payload"`
+	}{
+		Event:        "mission-backlog-item-added",
+		MissionSlug:  slug,
+		ItemID:       requestBody.ID,
+		ItemType:     requestBody.Type,
+		ItemPriority: requestBody.Priority,
+		ItemPayload:  requestBody.Payload,
+	})
+	go publishMessage(websocketMsg)
 }
 
 func getMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +414,79 @@ func getMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, response)
+}
+
+func subscribeWebsocket(w http.ResponseWriter, r *http.Request) {
+	c := r.Context()
+	// accept websocket
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: []string{"localhost:8080"},
+	})
+	if err != nil {
+		log.Printf("Unable to accept websocket: %v", err)
+		return
+	}
+	defer conn.Close(websocket.StatusInternalError, "")
+
+	// create subscriber
+	s := websocketSubscriber{
+		messages: make(chan []byte, 32), // buffer of 32 messages
+		closeConnection: func() {
+			conn.Close(websocket.StatusPolicyViolation, "connection too slow to keep up with messages")
+		},
+	}
+	addSubscriber(&s)
+	defer removeSubscriber(&s)
+
+	// publish messages
+	for {
+		select {
+		case <-c.Done():
+			log.Printf("Context done: %v", c.Err())
+			return
+		case msg := <-s.messages:
+			err = writeTimeout(c, 2*time.Second, conn, msg)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure ||
+					websocket.CloseStatus(err) == websocket.StatusGoingAway {
+					return
+				}
+				log.Printf("Write to websocket failed: %v", err)
+				return
+			}
+		}
+	}
+}
+
+func writeTimeout(c context.Context, timeout time.Duration, conn *websocket.Conn, msg []byte) error {
+	c, cancel := context.WithTimeout(c, timeout)
+	defer cancel()
+
+	return conn.Write(c, websocket.MessageText, msg)
+}
+
+func addSubscriber(s *websocketSubscriber) {
+	websocketSubscribersMu.Lock()
+	websocketSubscribers[s] = struct{}{}
+	websocketSubscribersMu.Unlock()
+}
+func removeSubscriber(s *websocketSubscriber) {
+	websocketSubscribersMu.Lock()
+	delete(websocketSubscribers, s)
+	websocketSubscribersMu.Unlock()
+}
+
+func publishMessage(message []byte) {
+	websocketSubscribersMu.Lock()
+	defer websocketSubscribersMu.Unlock()
+	for s := range websocketSubscribers {
+		select {
+		case s.messages <- message:
+		default:
+			// buffer for this subscriber is full
+			s.closeConnection()
+		}
+	}
 }
 
 // handle trust message from drone
@@ -437,6 +570,17 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		log.Printf("Could not publish message to MQTT broker: %v", err)
 		return
 	}
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-got-trusted",
+		MissionSlug: missionSlug,
+		DroneID:     deviceID,
+	})
+	go publishMessage(websocketMsg)
 }
 
 type ConfigDrone struct {

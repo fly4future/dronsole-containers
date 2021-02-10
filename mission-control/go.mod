@@ -10,4 +10,5 @@ require (
 	github.com/tiiuae/gosshgit v0.0.0-20210122092314-62b94e273869
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
 	gopkg.in/yaml.v2 v2.4.0
+	nhooyr.io/websocket v1.8.6
 )
