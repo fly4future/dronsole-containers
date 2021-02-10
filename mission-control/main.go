@@ -30,9 +30,10 @@ func main() {
 	router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Access-Control-Request-Method") != "" {
 			// Set CORS headers
-			header := w.Header()
-			header.Set("Access-Control-Allow-Methods", header.Get("Allow"))
-			header.Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Origin", "localhost:8080")
+			w.Header().Set("Access-Control-Allow-Methods", w.Header().Get("Allow"))
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "3600")
 		}
 
 		// Adjust status code to 204
@@ -42,12 +43,19 @@ func main() {
 	listenMQTTEvents(mqttClient)
 
 	log.Printf("Listening on port %s", port)
-	err := http.ListenAndServe(":"+port, router)
+	err := http.ListenAndServe(":"+port, setCORSHeader("localhost:8080", router))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	return
+}
+
+func setCORSHeader(origin string, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		handler.ServeHTTP(w, r)
+	})
 }
 
 var activeDrones map[string]time.Time = make(map[string]time.Time)
