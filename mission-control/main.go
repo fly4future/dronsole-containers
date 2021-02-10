@@ -30,7 +30,7 @@ func main() {
 	router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Access-Control-Request-Method") != "" {
 			// Set CORS headers
-			w.Header().Set("Access-Control-Allow-Origin", "localhost:8080")
+			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8080")
 			w.Header().Set("Access-Control-Allow-Methods", w.Header().Get("Allow"))
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Max-Age", "3600")
@@ -43,7 +43,7 @@ func main() {
 	listenMQTTEvents(mqttClient)
 
 	log.Printf("Listening on port %s", port)
-	err := http.ListenAndServe(":"+port, setCORSHeader("localhost:8080", router))
+	err := http.ListenAndServe(":"+port, setCORSHeader("http://localhost:8080", router))
 	if err != nil {
 		log.Fatal(err)
 	}
