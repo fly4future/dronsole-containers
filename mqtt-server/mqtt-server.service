@@ -1,0 +1,17 @@
+[Unit]
+Description=Simple mqtt-server which is used in local simulation environments
+
+[Service]
+Type=simple
+User=root
+Environment=MQTT_BROKER_ADDRESS=localhost:8333
+WorkingDirectory=/opt/mqtt-server
+ExecStart=/opt/mqtt-server/mqtt-server
+
+RestartSec=5s
+Restart=always
+
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
