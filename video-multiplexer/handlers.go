@@ -24,6 +24,7 @@ type rtspStream struct {
 	height int
 	streamid string
 	count int
+	stop bool
 	closeConnection func()
 }
 
@@ -71,6 +72,11 @@ func rtsptompeg(ws *websocket.Conn) {
 			break
 		}
 	}
+	stream.count--
+	if stream.count==0{
+		stream.stop = true
+	}
+	fmt.Printf("End stream: %v count:%v\n",stream.streamid, stream.count)
 }
 
 func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +101,7 @@ func startffmpeg(address string, streamid string) {
 	args := []string{"-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("Args: %v", args)
 	cmd := exec.Command("ffmpeg", args...)
-	log.Printf("cmd: %v", cmd)
+
 	cmdReader, _ := cmd.StdoutPipe()
 	errReader, _ := cmd.StderrPipe()
 	errscanner := bufio.NewScanner(errReader)
@@ -116,6 +122,9 @@ func startffmpeg(address string, streamid string) {
 			}
 			if stream.count > 0 {
 				stream.bytechan <- data[:n]
+			}else if stream.stop{
+				log.Println("Should STOP")
+				cmd.Process.Kill()
 			}
 		}
 	}()
@@ -150,6 +159,7 @@ func startffmpeg(address string, streamid string) {
 	if e != nil {
 		log.Printf("Cmd err:%v", e)
 	}
+	log.Printf("Stop streaming :%v", streamid)
 }
 
 func sendMagicBytes(ws *websocket.Conn, w int, h int) {
