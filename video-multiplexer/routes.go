@@ -1,9 +1,9 @@
 package main
 
 import (
-	"net/http"
 	"github.com/julienschmidt/httprouter"
 	"golang.org/x/net/websocket"
+	"net/http"
 )
 
 func registerRoutes(router *httprouter.Router) {

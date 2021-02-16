@@ -2,35 +2,35 @@ package main
 
 import (
 	"bufio"
-	"fmt"
-	"log"
 	"encoding/json"
+	"fmt"
+	"golang.org/x/net/websocket"
+	"log"
 	"math/big"
 	"net/http"
 	"os/exec"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
-	"path"
-	"golang.org/x/net/websocket"
+	"time"
 )
 
 type rtspStream struct {
 	bytechan chan []byte
-//	wsOpen bool = false
-	width int
-	height int
-	streamid string
-	count int
-	stop bool
+	//	wsOpen bool = false
+	width           int
+	height          int
+	streamid        string
+	count           int
+	stop            bool
 	closeConnection func()
 }
 
 var (
 	rtspStreamsMu sync.Mutex
-	rtspStreams	  map[*rtspStream]struct{} = make(map[*rtspStream]struct{})
+	rtspStreams   map[*rtspStream]struct{} = make(map[*rtspStream]struct{})
 )
 
 func addRtspStream(s *rtspStream) {
@@ -47,17 +47,17 @@ func removeRtspStream(s *rtspStream) {
 
 func rtsptompeg(ws *websocket.Conn) {
 	fmt.Printf("RtspTosMpeg\n")
-	streamid := path.Base(ws.Request().URL.Path) 
+	streamid := path.Base(ws.Request().URL.Path)
 	fmt.Printf("Streamid: %v\n", streamid)
 	var stream *rtspStream = nil
 
-	for s := range rtspStreams{
-		if s.streamid == streamid{
+	for s := range rtspStreams {
+		if s.streamid == streamid {
 			stream = s
 			break
 		}
 	}
-	if stream == nil{
+	if stream == nil {
 		log.Println("Rtsp stream does not exist")
 		return
 	}
@@ -65,7 +65,7 @@ func rtsptompeg(ws *websocket.Conn) {
 
 	sendMagicBytes(ws, stream.width, stream.height)
 	for b := range stream.bytechan {
-//		fmt.Printf("Got bytes : %v\n", len(b))
+		//		fmt.Printf("Got bytes : %v\n", len(b))
 		err := websocket.Message.Send(ws, b)
 		if err != nil {
 			log.Println(err)
@@ -73,16 +73,16 @@ func rtsptompeg(ws *websocket.Conn) {
 		}
 	}
 	stream.count--
-	if stream.count==0{
+	if stream.count == 0 {
 		stream.stop = true
 	}
-	fmt.Printf("End stream: %v count:%v\n",stream.streamid, stream.count)
+	fmt.Printf("End stream: %v count:%v\n", stream.streamid, stream.count)
 }
 
 func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("begin videoStreamHandler\n")
 	var requestBody struct {
-		Address string  `json:"address"`
+		Address  string `json:"address"`
 		StreamID string `json:"streamid"`
 	}
 	err := json.NewDecoder(r.Body).Decode(&requestBody)
@@ -109,7 +109,7 @@ func startffmpeg(address string, streamid string) {
 	stream := rtspStream{
 		bytechan: make(chan []byte),
 		streamid: streamid,
-		count: 0,
+		count:    0,
 	}
 
 	go func() {
@@ -122,7 +122,7 @@ func startffmpeg(address string, streamid string) {
 			}
 			if stream.count > 0 {
 				stream.bytechan <- data[:n]
-			}else if stream.stop{
+			} else if stream.stop {
 				log.Println("Should STOP")
 				cmd.Process.Kill()
 			}
