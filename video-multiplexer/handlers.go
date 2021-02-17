@@ -46,7 +46,6 @@ func removeRtspStream(s *rtspStream) {
 }
 
 func rtsptompeg(ws *websocket.Conn) {
-	fmt.Printf("RtspTosMpeg\n")
 	streamid := path.Base(ws.Request().URL.Path)
 	fmt.Printf("Streamid: %v\n", streamid)
 	var stream *rtspStream = nil
@@ -62,7 +61,6 @@ func rtsptompeg(ws *websocket.Conn) {
 		return
 	}
 	stream.count++
-
 	sendMagicBytes(ws, stream.width, stream.height)
 	for b := range stream.bytechan {
 		//		fmt.Printf("Got bytes : %v\n", len(b))
@@ -97,9 +95,8 @@ func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func startffmpeg(address string, streamid string) {
-	fmt.Printf("begin startffmpeg\n")
 	args := []string{"-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
-	log.Printf("Args: %v", args)
+	log.Printf("ffmpeg args: %v", args)
 	cmd := exec.Command("ffmpeg", args...)
 
 	cmdReader, _ := cmd.StdoutPipe()
@@ -115,7 +112,7 @@ func startffmpeg(address string, streamid string) {
 	go func() {
 		data := make([]byte, 16384)
 		for {
-			time.Sleep(40 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 			n, err := cmdReader.Read(data)
 			if err != nil {
 				break
@@ -123,7 +120,6 @@ func startffmpeg(address string, streamid string) {
 			if stream.count > 0 {
 				stream.bytechan <- data[:n]
 			} else if stream.stop {
-				log.Println("Should STOP")
 				cmd.Process.Kill()
 			}
 		}
@@ -144,6 +140,7 @@ func startffmpeg(address string, streamid string) {
 				for _, str := range l {
 					re := regexp.MustCompile(`(\d+)x(\d+)`)
 					if re.FindStringSubmatch(str) != nil {
+						str = strings.ReplaceAll(str,",","")
 						fmt.Printf("Found: %v\n", str)
 						dimstr := strings.Split(str, "x")
 						stream.width, _ = strconv.Atoi(dimstr[0])
