@@ -17,15 +17,39 @@ import (
 	"time"
 )
 
-type rtspStream struct {
+type mpegStream struct {
 	bytechan chan []byte
-	//	wsOpen bool = false
-	width           int
-	height          int
-	streamid        string
-	count           int
-	stop            bool
-	closeConnection func()
+	id       int
+}
+
+type rtspStream struct {
+	viewers  []*mpegStream
+	width    int
+	height   int
+	streamid string
+	count    int
+	stop     bool
+	mux      sync.Mutex
+}
+
+func (r *rtspStream) appendViewer(v *mpegStream) {
+	r.mux.Lock()
+	r.viewers = append(r.viewers, v)
+	r.count++
+	r.mux.Unlock()
+}
+
+func (r *rtspStream) removeViewer(v *mpegStream) {
+	r.mux.Lock()
+	for i, vs := range r.viewers {
+		if vs == v {
+			r.viewers = append(r.viewers[:i], r.viewers[i+1:]...)
+			r.count--
+			log.Printf("Removed viewer : %v ", i)
+			break
+		}
+	}
+	r.mux.Unlock()
 }
 
 var (
@@ -60,9 +84,13 @@ func rtsptompeg(ws *websocket.Conn) {
 		log.Println("Rtsp stream does not exist")
 		return
 	}
-	stream.count++
+	viewer := mpegStream{
+		bytechan: make(chan []byte),
+	}
+	//	stream.viewers = append(stream.viewers, &viewer)
+	stream.appendViewer(&viewer)
 	sendMagicBytes(ws, stream.width, stream.height)
-	for b := range stream.bytechan {
+	for b := range viewer.bytechan {
 		//		fmt.Printf("Got bytes : %v\n", len(b))
 		err := websocket.Message.Send(ws, b)
 		if err != nil {
@@ -70,7 +98,7 @@ func rtsptompeg(ws *websocket.Conn) {
 			break
 		}
 	}
-	stream.count--
+	stream.removeViewer(&viewer)
 	if stream.count == 0 {
 		stream.stop = true
 	}
@@ -104,7 +132,7 @@ func startffmpeg(address string, streamid string) {
 	errscanner := bufio.NewScanner(errReader)
 
 	stream := rtspStream{
-		bytechan: make(chan []byte),
+		//		viewers:  make(map[*mpegStream]struct{}),
 		streamid: streamid,
 		count:    0,
 	}
@@ -118,7 +146,9 @@ func startffmpeg(address string, streamid string) {
 				break
 			}
 			if stream.count > 0 {
-				stream.bytechan <- data[:n]
+				for _, v := range stream.viewers {
+					v.bytechan <- data[:n]
+				}
 			} else if stream.stop {
 				cmd.Process.Kill()
 			}
@@ -140,7 +170,7 @@ func startffmpeg(address string, streamid string) {
 				for _, str := range l {
 					re := regexp.MustCompile(`(\d+)x(\d+)`)
 					if re.FindStringSubmatch(str) != nil {
-						str = strings.ReplaceAll(str,",","")
+						str = strings.ReplaceAll(str, ",", "")
 						fmt.Printf("Found: %v\n", str)
 						dimstr := strings.Split(str, "x")
 						stream.width, _ = strconv.Atoi(dimstr[0])
