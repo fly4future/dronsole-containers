@@ -192,6 +192,37 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+func getMissionHandler(w http.ResponseWriter, r *http.Request) {
+	c := r.Context()
+	params := httprouter.ParamsFromContext(c)
+	slug := params.ByName("slug")
+
+	type drone struct {
+		DeviceID string `json:"device_id"`
+		Trusted  bool   `json:"trusted"`
+	}
+	var response struct {
+		Slug   string  `json:"slug"`
+		Name   string  `json:"name"`
+		Drones []drone `json:"drones"`
+	}
+	m, ok := missions[slug]
+	if !ok {
+		log.Printf("No such mission: %s", slug)
+		http.Error(w, "Mission not found", http.StatusBadRequest)
+		return
+	}
+
+	response.Slug = slug
+	response.Name = m.Name
+	response.Drones = make([]drone, len(m.Drones))
+	for i, d := range m.Drones {
+		response.Drones[i].DeviceID = d.DeviceID
+		response.Drones[i].Trusted = d.Trusted
+	}
+	writeJSON(w, response)
+}
+
 func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 	c := r.Context()
 	params := httprouter.ParamsFromContext(c)
