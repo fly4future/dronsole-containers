@@ -10,7 +10,7 @@ func main() {
 	router := httprouter.New()
 	registerRoutes(router)
 
-	port := "8083"
+	port := "8084"
 
 	log.Printf("Listening on port %s", port)
 	err := http.ListenAndServe(":"+port, router)

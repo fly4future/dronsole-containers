@@ -123,7 +123,7 @@ func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func startffmpeg(address string, streamid string) {
-	args := []string{"-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
+	args := []string{"-rtsp_transport", "tcp", "-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
 	cmd := exec.Command("ffmpeg", args...)
 
