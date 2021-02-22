@@ -65,7 +65,9 @@ func addRtspStream(s *rtspStream) {
 
 func removeRtspStream(s *rtspStream) {
 	rtspStreamsMu.Lock()
-	delete(rtspStreams, s)
+	if _, ok := rtspStreams[s]; ok {
+		delete(rtspStreams, s)
+	}
 	rtspStreamsMu.Unlock()
 }
 
@@ -75,7 +77,9 @@ func rtsptompeg(ws *websocket.Conn) {
 	var stream *rtspStream = nil
 
 	for s := range rtspStreams {
+		log.Printf("Stream id: %v\n", s.streamid)
 		if s.streamid == streamid {
+			log.Printf("Stream FOUND: %v\n", s.streamid)
 			stream = s
 			break
 		}
@@ -87,11 +91,9 @@ func rtsptompeg(ws *websocket.Conn) {
 	viewer := mpegStream{
 		bytechan: make(chan []byte),
 	}
-	//	stream.viewers = append(stream.viewers, &viewer)
 	stream.appendViewer(&viewer)
 	sendMagicBytes(ws, stream.width, stream.height)
 	for b := range viewer.bytechan {
-		//		fmt.Printf("Got bytes : %v\n", len(b))
 		err := websocket.Message.Send(ws, b)
 		if err != nil {
 			log.Println(err)
@@ -106,7 +108,7 @@ func rtsptompeg(ws *websocket.Conn) {
 }
 
 func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("begin videoStreamHandler\n")
+	fmt.Printf("begin videoStreamHandler\n%v\n", r)
 	var requestBody struct {
 		Address  string `json:"address"`
 		StreamID string `json:"streamid"`
@@ -118,73 +120,77 @@ func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Malformed request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Rtsp address: %s", requestBody.Address)
 	go startffmpeg(requestBody.Address, requestBody.StreamID)
 }
 
 func startffmpeg(address string, streamid string) {
 	args := []string{"-rtsp_transport", "tcp", "-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
-	cmd := exec.Command("ffmpeg", args...)
 
-	cmdReader, _ := cmd.StdoutPipe()
-	errReader, _ := cmd.StderrPipe()
-	errscanner := bufio.NewScanner(errReader)
-
-	stream := rtspStream{
-		//		viewers:  make(map[*mpegStream]struct{}),
-		streamid: streamid,
-		count:    0,
-	}
-
-	go func() {
-		data := make([]byte, 16384)
-		for {
-			time.Sleep(5 * time.Millisecond)
-			n, err := cmdReader.Read(data)
-			if err != nil {
-				break
-			}
-			if stream.count > 0 {
-				for _, v := range stream.viewers {
-					v.bytechan <- data[:n]
-				}
-			} else if stream.stop {
-				cmd.Process.Kill()
-			}
+	for i := 0; i < 3; i++ {
+		log.Printf("ffmpeg retry: %v", i)
+		cmd := exec.Command("ffmpeg", args...)
+		cmdReader, _ := cmd.StdoutPipe()
+		errReader, _ := cmd.StderrPipe()
+		errscanner := bufio.NewScanner(errReader)
+		stream := rtspStream{
+			streamid: streamid,
+			count:    0,
 		}
-	}()
-	go func() {
-		input := false
-		for errscanner.Scan() {
-			line := errscanner.Text()
-			//
-			if strings.Index(line, "Input #") == 0 {
-				input = true
-			} else if strings.Contains(line, "Output #") || strings.Contains(line, "Stream mapping") {
-				input = false
+		go func() {
+			data := make([]byte, 16384)
+			for {
+				time.Sleep(5 * time.Millisecond)
+				n, err := cmdReader.Read(data)
+				if err != nil {
+					break
+				}
+				if stream.count > 0 {
+					for _, v := range stream.viewers {
+						v.bytechan <- data[:n]
+					}
+				} else if stream.stop {
+					fmt.Printf("Kill ffmpeg\n")
+					cmd.Process.Kill()
+				}
 			}
-			if input {
-				fmt.Printf("ErrScanner: %v\n", line)
-				l := strings.Split(line, " ")
-				for _, str := range l {
-					re := regexp.MustCompile(`(\d+)x(\d+)`)
-					if re.FindStringSubmatch(str) != nil {
-						str = strings.ReplaceAll(str, ",", "")
-						fmt.Printf("Found: %v\n", str)
-						dimstr := strings.Split(str, "x")
-						stream.width, _ = strconv.Atoi(dimstr[0])
-						stream.height, _ = strconv.Atoi(dimstr[1])
-						addRtspStream(&stream)
-						defer removeRtspStream(&stream)
+		}()
+		go func() {
+			input := false
+			for errscanner.Scan() {
+				line := errscanner.Text()
+				//			fmt.Printf("ErrScanner: %v\n", line)
+				if strings.Index(line, "Input #") == 0 {
+					input = true
+				} else if strings.Contains(line, "Output #") || strings.Contains(line, "Stream mapping") {
+					input = false
+				}
+				if input {
+					fmt.Printf("ErrScanner: %v\n", line)
+					l := strings.Split(line, " ")
+					for _, str := range l {
+						re := regexp.MustCompile(`(\d+)x(\d+)`)
+						if re.FindStringSubmatch(str) != nil {
+							str = strings.ReplaceAll(str, ",", "")
+							log.Printf("Found: %v\n", str)
+							dimstr := strings.Split(str, "x")
+							stream.width, _ = strconv.Atoi(dimstr[0])
+							stream.height, _ = strconv.Atoi(dimstr[1])
+							addRtspStream(&stream)
+							log.Printf("added stream w:%v,  h:%v\n", stream.width, stream.height)
+						}
 					}
 				}
 			}
+		}()
+		e := cmd.Run()
+		if e != nil {
+			log.Printf("Cmd err:%v", e)
 		}
-	}()
-	e := cmd.Run()
-	if e != nil {
-		log.Printf("Cmd err:%v", e)
+		removeRtspStream(&stream)
+		if stream.stop {
+			break
+		}
 	}
 	log.Printf("Stop streaming :%v", streamid)
 }
