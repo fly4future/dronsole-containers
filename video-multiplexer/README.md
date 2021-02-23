@@ -31,3 +31,16 @@ In the video stream can be viewed in browser as follows:
 	</script>
 </body>
 ```
+
+Running and requesting case 2:
+Rtsp server addres can also be given in command line as follows:
+```
+docker run --rm -it -p 8084:8084 tii-video-multiplexer localhost:8554
+```
+In this case a http get request returns the websocket url and starts the rtsp stream:
+```
+http://<video-multiplexer-ip>:8084/getandstartvideo?deviceid=<drone_id>
+```
+The rtsp stream is stopped if the number of viewers hsa been dropped back to zero.
+
+

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-//a new mpegStream instance is created for every websocket stream (i.e for every web UI) 
+//a new mpegStream instance is created for every websocket stream (i.e for every web UI)
 type mpegStream struct {
 	bytechan chan []byte
 	id       int
@@ -77,7 +77,21 @@ func removeRtspStream(s *rtspStream) {
 	rtspStreamsMu.Unlock()
 }
 
-//handle websocket reques
+//check if rtsp stream exists
+func rtspStreamExists(id string) bool {
+	ret := false
+	rtspStreamsMu.Lock()
+	for k := range rtspStreams {
+		if k.streamid == id {
+			ret = true
+			break
+		}
+	}
+	rtspStreamsMu.Unlock()
+	return ret
+}
+
+//handle websocket request
 func rtsptompeg(ws *websocket.Conn) {
 	streamid := path.Base(ws.Request().URL.Path)
 	fmt.Printf("Streamid: %v\n", streamid)
@@ -99,7 +113,7 @@ func rtsptompeg(ws *websocket.Conn) {
 		return
 	}
 
-	//create bytechannel for videostream 
+	//create bytechannel for videostream
 	viewer := mpegStream{
 		bytechan: make(chan []byte),
 	}
@@ -108,7 +122,7 @@ func rtsptompeg(ws *websocket.Conn) {
 	stream.appendViewer(&viewer)
 	sendMagicBytes(ws, stream.width, stream.height)
 
-	//send data to each viewer 
+	//send data to each viewer
 	for b := range viewer.bytechan {
 		err := websocket.Message.Send(ws, b)
 		if err != nil {
@@ -139,15 +153,38 @@ func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Malformed request body", http.StatusBadRequest)
 		return
 	}
-	//go routine for ffmpeg stream from rtsp server 
+	//go routine for ffmpeg stream from rtsp server
 	go startffmpeg(requestBody.Address, requestBody.StreamID)
+}
+
+//handler for get videostream request. Starts the ffmpeg stream from rtsp server if not started.
+func getVideoHandler(w http.ResponseWriter, r *http.Request) {
+	//	fmt.Printf("begin getVideoHandler\n%v\n",r.Host)
+
+	deviceid, ok := r.URL.Query()["deviceid"]
+	if !ok || len(deviceid[0]) < 1 {
+		log.Println("Deviceid is missing")
+		http.Error(w, "Deviceid parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	//check if rtsp stream exists and start if not
+	if !rtspStreamExists(deviceid[0]) {
+		//go routine for ffmpeg stream from rtsp server
+		go startffmpeg(fmt.Sprintf("rtsp://%s/%s", rtspAddress, deviceid[0]), deviceid[0])
+	}
+	var resp struct {
+		Wsaddress string `json:"wsaddress"`
+	}
+	resp.Wsaddress = fmt.Sprintf("ws://%s/video/%s", r.Host, deviceid[0])
+	writeJSON(w, resp)
 }
 
 func startffmpeg(address string, streamid string) {
 	args := []string{"-rtsp_transport", "tcp", "-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
 
-	//retry loop for starting ffmpeg again, if ffmpeg exeits (for example if the rtsp stream does not exist yet)
+	//retry loop for starting ffmpeg again, if ffmpeg exits (for example if the rtsp stream does not exist yet)
 	for i := 0; i < 3; i++ {
 		log.Printf("ffmpeg retry: %v", i)
 		cmd := exec.Command("ffmpeg", args...)
