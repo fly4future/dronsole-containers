@@ -5,26 +5,35 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
-	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/julienschmidt/httprouter"
 )
 
-var mqttClient mqtt.Client
+var mqttPub MqttPublisher
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Println("usage: mission-control <mqtt-broker-address>")
+		fmt.Println("usage: mission-control <mqtt-broker-address> | cloud-push | cloud-pull")
 		return
 	}
+
 	mqttBrokerAddress := os.Args[1]
+	if mqttBrokerAddress == "cloud-pull" {
+		log.Println("MQTT: IoT Core pull")
+		mqttPub = NewIoTPublisher()
+		go pullIoTCoreMessages("telemetry-mission-control-pull-sub")
+		go pullIoTCoreMessages("iot-device-location-mission-control-pull-sub")
+	} else if mqttBrokerAddress == "cloud-push" {
+		log.Println("MQTT: IoT Core push")
+		mqttPub = NewIoTPublisher()
+	} else {
+		log.Printf("MQTT: emulator @ %s", mqttBrokerAddress)
+		mqttClient := newMQTTClient("mission-control", mqttBrokerAddress)
+		defer mqttClient.Disconnect(1000)
+		listenMQTTEvents(mqttClient)
+		mqttPub = NewMqttPublisher(mqttClient)
+	}
 
-	port := "8082"
-
-	mqttClient = newMQTTClient(mqttBrokerAddress)
-	defer mqttClient.Disconnect(1000)
 	router := httprouter.New()
 	registerRoutes(router)
 	router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +49,7 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	listenMQTTEvents(mqttClient)
-
+	port := "8082"
 	log.Printf("Listening on port %s", port)
 	err := http.ListenAndServe(":"+port, setCORSHeader("http://localhost:8080", router))
 	if err != nil {
@@ -56,72 +64,4 @@ func setCORSHeader(origin string, handler http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		handler.ServeHTTP(w, r)
 	})
-}
-
-var activeDrones map[string]time.Time = make(map[string]time.Time)
-
-func isDroneActive(deviceID string) bool {
-	t, ok := activeDrones[deviceID]
-	if !ok {
-		// device haven't seen online
-		return false
-	}
-
-	minuteAgo := time.Now().Add(-1 * time.Minute)
-	if t.Before(minuteAgo) {
-		return false
-	}
-	return true
-}
-
-func listenMQTTEvents(client mqtt.Client) {
-	const qos = 0
-	token := client.Subscribe("/devices/#", qos, func(client mqtt.Client, msg mqtt.Message) {
-		t := strings.TrimPrefix(msg.Topic(), "/devices/")
-		deviceID := strings.Split(t, "/")[0]
-		topic := strings.TrimPrefix(t, deviceID+"/")
-		if strings.HasPrefix(topic, "events") {
-			// we have a message from the device
-			activeDrones[deviceID] = time.Now()
-
-			handleMQTTEvent(deviceID, strings.TrimPrefix(topic, "events/"), msg)
-		}
-	})
-
-	err := token.Error()
-	if err != nil {
-		log.Fatalf("Could not subscribe to MQTT events: %v", err)
-	}
-}
-func handleMQTTEvent(deviceID string, eventTopic string, msg mqtt.Message) {
-	if eventTopic == "trust" {
-		log.Printf("Got a trust-event from %v", deviceID)
-		go handleTrustMessage(deviceID, msg.Payload())
-	}
-}
-
-func newMQTTClient(brokerAddress string) mqtt.Client {
-	opts := mqtt.NewClientOptions().
-		AddBroker(brokerAddress).
-		SetClientID("mission-control").
-		SetUsername("mission-control").
-		//SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}).
-		SetPassword("").
-		SetProtocolVersion(4) // Use MQTT 3.1.1
-
-	client := mqtt.NewClient(opts)
-
-	tok := client.Connect()
-	if err := tok.Error(); err != nil {
-		log.Fatalf("MQTT connection failed: %v", err)
-	}
-	if !tok.WaitTimeout(time.Second * 5) {
-		log.Fatal("MQTT connection timeout")
-	}
-	err := tok.Error()
-	if err != nil {
-		log.Fatalf("Could not connect to MQTT broker: %v", err)
-	}
-
-	return client
 }
