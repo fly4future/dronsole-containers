@@ -311,13 +311,7 @@ func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubtok := mqttClient.Publish(fmt.Sprintf("/devices/%s/commands/control", requestBody.DeviceID), 1, false, msg)
-	if !pubtok.WaitTimeout(time.Second * 2) {
-		log.Printf("Publish timeout")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	err = pubtok.Error()
+	err = mqttPub.SendCommand(requestBody.DeviceID, "control", msg)
 	if err != nil {
 		log.Printf("Could not publish message to MQTT broker: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -401,12 +395,7 @@ func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, drone := range f.Drones {
-		pubtok := mqttClient.Publish(fmt.Sprintf("/devices/%s/commands/control", drone.DeviceID), 1, false, msg)
-		if !pubtok.WaitTimeout(time.Second * 2) {
-			log.Printf("Publish timeout for '%v'", drone.DeviceID)
-			continue
-		}
-		err = pubtok.Error()
+		err = mqttPub.SendCommand(drone.DeviceID, "control", msg)
 		if err != nil {
 			log.Printf("Could not publish message to MQTT broker for '%v': %v", drone.DeviceID, err)
 			continue
@@ -591,12 +580,7 @@ func handleTrustMessage(deviceID string, payload []byte) {
 
 	log.Printf("Sending join-mission command: %s", deviceID)
 
-	pubtok := mqttClient.Publish(fmt.Sprintf("/devices/%s/commands/control", deviceID), 1, false, msg)
-	if !pubtok.WaitTimeout(time.Second * 2) {
-		log.Printf("Publish timeout")
-		return
-	}
-	err = pubtok.Error()
+	err = mqttPub.SendCommand(deviceID, "control", msg)
 	if err != nil {
 		log.Printf("Could not publish message to MQTT broker: %v", err)
 		return
@@ -861,4 +845,29 @@ func appendMessage(repoRootPath string, messageType string, message string) (str
 	}
 
 	return "cloud/outbox.log", nil
+}
+
+var activeDrones map[string]time.Time = make(map[string]time.Time)
+
+func isDroneActive(deviceID string) bool {
+	t, ok := activeDrones[deviceID]
+	if !ok {
+		// device haven't seen online
+		return false
+	}
+
+	minuteAgo := time.Now().Add(-1 * time.Minute)
+	if t.Before(minuteAgo) {
+		return false
+	}
+	return true
+}
+
+func handleMQTTEvent(deviceID string, topic string, payload []byte) {
+	log.Printf("Event: %s %s\n", deviceID, topic)
+	activeDrones[deviceID] = time.Now()
+	if topic == "trust" {
+		log.Printf("Got a trust-event from %v", deviceID)
+		go handleTrustMessage(deviceID, payload)
+	}
 }

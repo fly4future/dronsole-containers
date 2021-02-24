@@ -1,0 +1,52 @@
+GET http://localhost:8082/missions
+
+###
+
+DELETE http://localhost:8082/missions/s1
+
+###
+
+POST http://localhost:8082/missions
+Content-Type: application/json
+
+{
+    "slug": "s1",
+    "name": "s1-name",
+    "allowed_ssh_keys":[
+        "hello"
+    ]
+}
+
+###
+
+POST http://localhost:8082/missions/s1/drones
+Content-Type: application/json
+
+{
+    "device_id": "d1"
+}
+
+###
+
+POST http://localhost:8082/missions/s1/backlog
+Content-Type: application/json
+
+{
+    "id": "123",
+    "type": "fly-to-2",
+    "priority": 2,
+    "payload": {
+        "lat": 0.0,
+        "lon": 1.2
+    }
+}
+
+###
+
+GET http://localhost:8082/missions/s1/backlog
+
+# {"tasks":{"d1":[{"id":"","lat":0,"lon":0,"alt":0}]}}
+
+###
+
+GET http://localhost:8083/drones

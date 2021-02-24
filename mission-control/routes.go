@@ -18,6 +18,8 @@ func registerRoutes(router *httprouter.Router) {
 	router.HandlerFunc(http.MethodGet, "/missions/:slug/backlog", getMissionBacklogHandler)
 
 	router.HandlerFunc(http.MethodGet, "/subscribe", subscribeWebsocket)
+
+	router.HandlerFunc(http.MethodPost, "/pubsub/iot-telemetry", telemetryPostHandler)
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {
