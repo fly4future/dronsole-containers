@@ -11,5 +11,7 @@ FROM golang:latest
 RUN apt update
 RUN apt -y install ffmpeg
 COPY --from=builder /video-multiplexer/video-multiplexer /bin/video-multiplexer
+COPY testpage /bin/testpage
+WORKDIR /bin
 EXPOSE 8084
 ENTRYPOINT ["/bin/video-multiplexer"]

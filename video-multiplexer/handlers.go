@@ -2,9 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/net/websocket"
+	"io/ioutil"
 	"log"
 	"math/big"
 	"net/http"
@@ -14,7 +15,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
+
+	"github.com/pkg/errors"
+	"golang.org/x/net/websocket"
 )
 
 //a new mpegStream instance is created for every websocket stream (i.e for every web UI)
@@ -92,10 +97,16 @@ func rtspStreamExists(id string) bool {
 }
 
 //handle websocket request
-func rtsptompeg(ws *websocket.Conn) {
+func streamVideo(ws *websocket.Conn) {
 	streamid := path.Base(ws.Request().URL.Path)
-	fmt.Printf("Streamid: %v\n", streamid)
+	log.Printf("Streamid: %v\n", streamid)
 	var stream *rtspStream = nil
+
+	//check if rtsp stream exists and start if not
+	if !rtspStreamExists(streamid) {
+		//go routine for ffmpeg stream from rtsp server
+		go startffmpeg(streamid)
+	}
 
 	//find the correct rtsp stream
 	for s := range rtspStreams {
@@ -139,28 +150,24 @@ func rtsptompeg(ws *websocket.Conn) {
 	fmt.Printf("End stream: %v count:%v\n", stream.streamid, stream.count)
 }
 
-//handler for startvideostream request. Starts the ffmpeg stream from rtsp server.
-func videoStreamHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("begin videoStreamHandler\n%v\n", r)
-	var requestBody struct {
-		Address  string `json:"address"`
-		StreamID string `json:"streamid"`
-	}
-	err := json.NewDecoder(r.Body).Decode(&requestBody)
-	defer r.Body.Close()
-	if err != nil {
-		log.Printf("Could not decode body: %v", err)
-		http.Error(w, "Malformed request body", http.StatusBadRequest)
-		return
-	}
-	//go routine for ffmpeg stream from rtsp server
-	go startffmpeg(requestBody.Address, requestBody.StreamID)
+//send magic bytes to web socket
+func sendMagicBytes(ws *websocket.Conn, w int, h int) {
+	log.Printf("sendMagicBytes: %v, %v", w, h)
+	buf := make([]byte, 8)
+	buf[0] = 'j'
+	buf[1] = 's'
+	buf[2] = 'm'
+	buf[3] = 'p'
+	copy(buf[4:], big.NewInt(int64(w)).Bytes())
+	copy(buf[6:], big.NewInt(int64(h)).Bytes())
+	websocket.Message.Send(ws, buf[:8])
+	time.Sleep(1 * time.Second)
 }
 
-//handler for get videostream request. Starts the ffmpeg stream from rtsp server if not started.
-func getVideoHandler(w http.ResponseWriter, r *http.Request) {
-	//	fmt.Printf("begin getVideoHandler\n%v\n",r.Host)
+var testpage = template.Must(template.ParseFiles("./testpage/testpage.html"))
 
+//handler for test page
+func testHandler(w http.ResponseWriter, r *http.Request) {
 	deviceid, ok := r.URL.Query()["deviceid"]
 	if !ok || len(deviceid[0]) < 1 {
 		log.Println("Deviceid is missing")
@@ -168,20 +175,39 @@ func getVideoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//check if rtsp stream exists and start if not
-	if !rtspStreamExists(deviceid[0]) {
-		//go routine for ffmpeg stream from rtsp server
-		go startffmpeg(fmt.Sprintf("rtsp://%s/%s", rtspAddress, deviceid[0]), deviceid[0])
+	data := struct {
+		Url string
+	}{
+		fmt.Sprintf("ws://%s/video/%s", r.Host, deviceid[0]),
 	}
-	var resp struct {
-		Wsaddress string `json:"wsaddress"`
-	}
-	resp.Wsaddress = fmt.Sprintf("ws://%s/video/%s", r.Host, deviceid[0])
-	writeJSON(w, resp)
+	var html bytes.Buffer
+	testpage.Execute(&html, data)
+	w.Header().Set("Content-Type", "text/html")
+	w.Write(html.Bytes())
 }
 
-func startffmpeg(address string, streamid string) {
-	args := []string{"-rtsp_transport", "tcp", "-i", address, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
+func getJS(w http.ResponseWriter, r *http.Request) {
+	data, err := ioutil.ReadFile("./testpage/jsmpeg.min.js")
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/javascript")
+	w.Write(data)
+}
+
+func startffmpeg(streamid string) {
+	readAddr := fmt.Sprintf("rtsp://%s/%s", *rtspServerAddress, streamid)
+	writeAddr := fmt.Sprintf("rtsp://DroneUser:22f6c4de-6144-4f6c-82ea-8afcdf19f316@%s/%s", *rtspServerAddress, streamid)
+
+	err := sendStartVideoCommand(streamid, writeAddr)
+	if err != nil {
+		log.Printf("Failed to send start command: %v", err)
+		return
+	}
+
+	args := []string{"-rtsp_transport", "tcp", "-i", readAddr, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
 
 	//retry loop for starting ffmpeg again, if ffmpeg exits (for example if the rtsp stream does not exist yet)
@@ -213,6 +239,10 @@ func startffmpeg(address string, streamid string) {
 					//no viewers anymore, kill ffmpeg
 					fmt.Printf("Kill ffmpeg\n")
 					cmd.Process.Kill()
+					err := sendStopVideoCommand(streamid)
+					if err != nil {
+						log.Printf("Failed to send start command: %v", err)
+					}
 				}
 			}
 		}()
@@ -264,16 +294,44 @@ func startffmpeg(address string, streamid string) {
 	log.Printf("Stop streaming :%v", streamid)
 }
 
-//send magic bytes to web socket
-func sendMagicBytes(ws *websocket.Conn, w int, h int) {
-	log.Printf("sendMagicBytes: %v, %v", w, h)
-	buf := make([]byte, 8)
-	buf[0] = 'j'
-	buf[1] = 's'
-	buf[2] = 'm'
-	buf[3] = 'p'
-	copy(buf[4:], big.NewInt(int64(w)).Bytes())
-	copy(buf[6:], big.NewInt(int64(h)).Bytes())
-	websocket.Message.Send(ws, buf[:8])
-	time.Sleep(1 * time.Second)
+type gstreamerCmd struct {
+	Command string
+	Address string
+	Source  string
+}
+
+func sendStartVideoCommand(deviceID string, address string) error {
+	cmd := gstreamerCmd{
+		"start",
+		address,
+		"",
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to serialize command")
+	}
+	err = mqttPub.SendCommand(deviceID, "videostream", payload)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to send videostream command to device")
+	}
+
+	return nil
+}
+
+func sendStopVideoCommand(deviceID string) error {
+	cmd := gstreamerCmd{
+		"stop",
+		"",
+		"",
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to serialize command")
+	}
+	err = mqttPub.SendCommand(deviceID, "videostream", payload)
+	if err != nil {
+		return errors.WithMessage(err, "Failed to send MQTT command")
+	}
+
+	return nil
 }

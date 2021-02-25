@@ -12,35 +12,31 @@ Run container in docker
 docker run --rm -it -p 8084:8084 tii-video-multiplexer 
 ```
 
-## Start encoding videostream in rtsp address :
+## Arguments
 
-For example start encoding videostream from rtsp as follows:
-```
-curl -d '{"address":"rtsp://Username:Password@localhost:8554/stream_x","streamid":"test_streamid"}' localhost:8084/startvideostream
-```
+```bash
+# Run locally against MQTT broker
+video-multiplexer -rtsp 127.0.0.1:8554 -mqtt 127.0.0.1:8883
 
-In the video stream can be viewed in browser as follows:
-```
-<body>
-	<canvas id="video-canvas"></canvas>
-	<script type="text/javascript" src="jsmpeg.min.js"></script>
-	<script type="text/javascript">
-		var canvas = document.getElementById('video-canvas');
-		var url = 'ws://localhost:8083/video/test_streamid';
-		var player = new JSMpeg.Player(url, { canvas: canvas });
-	</script>
-</body>
+# Run against Cloud IoT Core
+video-multiplexer -rtsp <video-server> -mqtt cloud
 ```
 
-Running and requesting case 2:
-Rtsp server addres can also be given in command line as follows:
-```
-docker run --rm -it -p 8084:8084 tii-video-multiplexer localhost:8554
-```
-In this case a http get request returns the websocket url and starts the rtsp stream:
-```
-http://<video-multiplexer-ip>:8084/getandstartvideo?deviceid=<drone_id>
-```
-The rtsp stream is stopped if the number of viewers hsa been dropped back to zero.
+# Develop locally
 
+Start drone video emulator: video-test-server
+```bash
+go run .
 
+# or
+
+ffmpeg -stream_loop -1 -i ./test/testvideo.mp4 -vcodec libx264 -tune zerolatency -crf 18 -f rtsp -muxdelay 0.1 rtsp://DroneUser:22f6c4de-6144-4f6c-82ea-8afcdf19f316@127.0.0.1:8554/some-id
+
+```
+
+Start video-multiplexer
+```
+go run . -test
+```
+
+Browse to: http://localhost:8084/test?deviceid=some-id
