@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -37,9 +38,9 @@ func main() {
 	router := httprouter.New()
 	registerRoutes(router)
 	router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Access-Control-Request-Method") != "" {
+		if isValidOrigin(r) && r.Header.Get("Access-Control-Request-Method") != "" {
 			// Set CORS headers
-			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:8080")
+			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			w.Header().Set("Access-Control-Allow-Methods", w.Header().Get("Allow"))
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Access-Control-Max-Age", "3600")
@@ -51,7 +52,7 @@ func main() {
 
 	port := "8082"
 	log.Printf("Listening on port %s", port)
-	err := http.ListenAndServe(":"+port, setCORSHeader("http://localhost:8080", router))
+	err := http.ListenAndServe(":"+port, setCORSHeader(router))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,9 +60,16 @@ func main() {
 	return
 }
 
-func setCORSHeader(origin string, handler http.Handler) http.Handler {
+func setCORSHeader(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		if isValidOrigin(r) {
+			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+		}
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func isValidOrigin(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	return strings.HasSuffix(o, "localhost:8080") || strings.HasSuffix(o, "auto-fleet-mgnt.ew.r.appspot.com")
 }
