@@ -23,7 +23,7 @@ func main() {
 		mqttPub = NewIoTPublisher()
 	} else {
 		log.Printf("MQTT: broker @ %s", *mqttBrokerAddress)
-		mqttClient := newMQTTClient("mission-control", *mqttBrokerAddress)
+		mqttClient := newMQTTClient("video-multiplexer", *mqttBrokerAddress)
 		defer mqttClient.Disconnect(1000)
 		mqttPub = NewMqttPublisher(mqttClient)
 	}
