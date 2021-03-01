@@ -20,6 +20,8 @@ func registerRoutes(router *httprouter.Router) {
 	router.HandlerFunc(http.MethodGet, "/subscribe", subscribeWebsocket)
 
 	router.HandlerFunc(http.MethodPost, "/pubsub/iot-telemetry", telemetryPostHandler)
+
+	router.HandlerFunc(http.MethodGet, "/healthz", healthz)
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {
@@ -32,4 +34,8 @@ func writeJSON(w http.ResponseWriter, data interface{}) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
+}
+
+func healthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
 }

@@ -71,5 +71,5 @@ func setCORSHeader(handler http.Handler) http.Handler {
 
 func isValidOrigin(r *http.Request) bool {
 	o := r.Header.Get("Origin")
-	return strings.HasSuffix(o, "localhost:8080") || strings.HasSuffix(o, "auto-fleet-mgnt.ew.r.appspot.com")
+	return strings.HasSuffix(o, "localhost:8080") || strings.HasSuffix(o, "auto-fleet-mgnt.ew.r.appspot.com") || strings.HasSuffix(o, "sacplatform.com")
 }
