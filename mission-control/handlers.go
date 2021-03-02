@@ -249,6 +249,9 @@ func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	f.GitServer.DeleteRepo("mission.git")
 
+	for _, d := range f.Drones {
+		delete(drones, d.DeviceID)
+	}
 	delete(missions, slug)
 
 	websocketMsg, _ := json.Marshal(struct {
