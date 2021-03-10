@@ -18,141 +18,102 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"golang.org/x/net/websocket"
 )
 
-//a new mpegStream instance is created for every websocket stream (i.e for every web UI)
-type mpegStream struct {
-	bytechan chan []byte
-	id       int
+type device struct {
+	deviceID string
+	once     sync.Once
+	stream   *streamer
 }
 
-//a new rtspStream instance is created for every rtsp stream opneing the stream from rtsp server
-type rtspStream struct {
-	viewers  []*mpegStream
-	width    int
-	height   int
-	streamid string
-	count    int
-	stop     bool
-	mux      sync.Mutex
+type streamer struct {
+	listeners sync.Map
+	stream    chan *streamBuffer
+	end       chan bool
 }
 
-//append viever instance to viever list of one rtspstream
-func (r *rtspStream) appendViewer(v *mpegStream) {
-	r.mux.Lock()
-	r.viewers = append(r.viewers, v)
-	r.count++
-	r.mux.Unlock()
+type streamBuffer struct {
+	width  int
+	height int
+	buffer []byte
 }
 
-//remove viever instance from viever list
-func (r *rtspStream) removeViewer(v *mpegStream) {
-	r.mux.Lock()
-	for i, vs := range r.viewers {
-		if vs == v {
-			r.viewers = append(r.viewers[:i], r.viewers[i+1:]...)
-			r.count--
-			log.Printf("Removed viewer : %v ", i)
-			break
+func (x *device) getStreamer() *streamer {
+	x.once.Do(x.start)
+	return x.stream
+}
+
+func (x *device) start() {
+	x.stream = &streamer{sync.Map{}, make(chan *streamBuffer), make(chan bool)}
+	go x.stream.multicast(x.deviceID)
+	go startffmpegV2(x.deviceID, x.stream.stream, x.stream.end)
+}
+
+func (x *streamer) multicast(deviceID string) {
+	for b := range x.stream {
+		count := 0
+		x.listeners.Range(func(key, value interface{}) bool {
+			sub := value.(chan *streamBuffer)
+			if len(sub) > 5 {
+				log.Printf("Subscriber lagging, channel length: %d", len(sub))
+			} else {
+				sub <- b
+			}
+			count++
+			return true
+		})
+		if count == 0 {
+			log.Printf("Ending stream: no subscribers")
+			x.end <- true
+			streams.Delete(deviceID)
 		}
 	}
-	r.mux.Unlock()
 }
 
 var (
-	rtspStreamsMu sync.Mutex
-	rtspStreams   map[*rtspStream]struct{} = make(map[*rtspStream]struct{})
+	streams sync.Map
 )
 
-//add rtsp stream to rtspstream list
-func addRtspStream(s *rtspStream) {
-	rtspStreamsMu.Lock()
-	rtspStreams[s] = struct{}{}
-	rtspStreamsMu.Unlock()
-}
-
-//remove rtsp stream from rtspstream list
-func removeRtspStream(s *rtspStream) {
-	rtspStreamsMu.Lock()
-	if _, ok := rtspStreams[s]; ok {
-		delete(rtspStreams, s)
-	}
-	rtspStreamsMu.Unlock()
-}
-
-//check if rtsp stream exists
-func rtspStreamExists(id string) bool {
-	ret := false
-	rtspStreamsMu.Lock()
-	for k := range rtspStreams {
-		if k.streamid == id {
-			ret = true
-			break
-		}
-	}
-	rtspStreamsMu.Unlock()
-	return ret
-}
-
-//handle websocket request
 func streamVideo(ws *websocket.Conn) {
-	streamid := path.Base(ws.Request().URL.Path)
-	log.Printf("Streamid: %v\n", streamid)
-	var stream *rtspStream = nil
+	deviceID := path.Base(ws.Request().URL.Path)
+	log.Printf("Streamid: %v\n", deviceID)
 
-	//check if rtsp stream exists and start if not
-	if !rtspStreamExists(streamid) {
-		//go routine for ffmpeg stream from rtsp server
-		go startffmpeg(streamid)
+	ds := &device{deviceID: deviceID, once: sync.Once{}, stream: nil}
+	dsTemp, loaded := streams.LoadOrStore(deviceID, ds)
+	if loaded {
+		ds = dsTemp.(*device)
 	}
 
-	//find the correct rtsp stream
-	for s := range rtspStreams {
-		log.Printf("Stream id: %v\n", s.streamid)
-		if s.streamid == streamid {
-			log.Printf("Stream FOUND: %v\n", s.streamid)
-			stream = s
-			break
-		}
-	}
+	id := uuid.New().String()
+	stream := make(chan *streamBuffer, 10)
+	streamer := ds.getStreamer()
+	streamer.listeners.Store(id, stream)
 
-	if stream == nil {
-		//correct rtspStream was not found, return
-		log.Println("Rtsp stream does not exist")
+	first := <-stream
+	magicBytes := makeMagicBytes(first.width, first.height)
+
+	err := websocket.Message.Send(ws, magicBytes)
+	if err != nil {
+		log.Printf("Failed to send magic bytes: %v", err)
+		streamer.listeners.Delete(id)
 		return
 	}
 
-	//create bytechannel for videostream
-	viewer := mpegStream{
-		bytechan: make(chan []byte),
-	}
-
-	//append viewer viewer list of current rtsp stream
-	stream.appendViewer(&viewer)
-	sendMagicBytes(ws, stream.width, stream.height)
-
-	//send data to each viewer
-	for b := range viewer.bytechan {
-		err := websocket.Message.Send(ws, b)
+	for b := range stream {
+		err := websocket.Message.Send(ws, b.buffer)
 		if err != nil {
-			log.Println(err)
+			log.Printf("Failed to send stream buffer: %v", err)
 			break
 		}
 	}
-	// remove viewer from viewer lis
-	stream.removeViewer(&viewer)
-	if stream.count == 0 {
-		//if the list is empty stop the current rtsp stream as well (no-one is viewing the stream)
-		stream.stop = true
-	}
-	fmt.Printf("End stream: %v count:%v\n", stream.streamid, stream.count)
+
+	streamer.listeners.Delete(id)
 }
 
-//send magic bytes to web socket
-func sendMagicBytes(ws *websocket.Conn, w int, h int) {
-	log.Printf("sendMagicBytes: %v, %v", w, h)
+func makeMagicBytes(w int, h int) []byte {
 	buf := make([]byte, 8)
 	buf[0] = 'j'
 	buf[1] = 's'
@@ -160,8 +121,7 @@ func sendMagicBytes(ws *websocket.Conn, w int, h int) {
 	buf[3] = 'p'
 	copy(buf[4:], big.NewInt(int64(w)).Bytes())
 	copy(buf[6:], big.NewInt(int64(h)).Bytes())
-	websocket.Message.Send(ws, buf[:8])
-	time.Sleep(1 * time.Second)
+	return buf[:8]
 }
 
 var testpage = template.Must(template.ParseFiles("./testpage/testpage.html"))
@@ -178,7 +138,7 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Url string
 	}{
-		fmt.Sprintf("ws://%s/video/%s", r.Host, deviceid[0]),
+		fmt.Sprintf("//%s/video/%s", r.Host, deviceid[0]),
 	}
 	var html bytes.Buffer
 	testpage.Execute(&html, data)
@@ -197,30 +157,31 @@ func getJS(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func startffmpeg(streamid string) {
+func startffmpegV2(streamid string, res chan *streamBuffer, end chan bool) {
 	readAddr := fmt.Sprintf("rtsp://%s/%s", *rtspServerAddress, streamid)
 	writeAddr := fmt.Sprintf("rtsp://DroneUser:22f6c4de-6144-4f6c-82ea-8afcdf19f316@%s/%s", *rtspServerAddress, streamid)
 
 	err := sendStartVideoCommand(streamid, writeAddr)
 	if err != nil {
 		log.Printf("Failed to send start command: %v", err)
+		close(res)
 		return
 	}
 
 	args := []string{"-rtsp_transport", "tcp", "-i", readAddr, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
 
+	width := 1280
+	height := 720
+	quit := false
+
 	//retry loop for starting ffmpeg again, if ffmpeg exits (for example if the rtsp stream does not exist yet)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 15; i++ {
 		log.Printf("ffmpeg retry: %v", i)
 		cmd := exec.Command("ffmpeg", args...)
 		cmdReader, _ := cmd.StdoutPipe()
 		errReader, _ := cmd.StderrPipe()
 		errscanner := bufio.NewScanner(errReader)
-		stream := rtspStream{
-			streamid: streamid,
-			count:    0,
-		}
 
 		//stdout read function which streams to viewer bytechannels
 		go func() {
@@ -229,20 +190,23 @@ func startffmpeg(streamid string) {
 				time.Sleep(5 * time.Millisecond)
 				n, err := cmdReader.Read(data)
 				if err != nil {
+					log.Printf("Cmd read failed: %v", err)
 					break
 				}
-				if stream.count > 0 {
-					for _, v := range stream.viewers {
-						v.bytechan <- data[:n]
-					}
-				} else if stream.stop {
-					//no viewers anymore, kill ffmpeg
+				// log.Printf("Streaming bytes: %v", n)
+
+				select {
+				case <-end:
+					quit = true
 					fmt.Printf("Kill ffmpeg\n")
 					cmd.Process.Kill()
 					err := sendStopVideoCommand(streamid)
 					if err != nil {
 						log.Printf("Failed to send start command: %v", err)
 					}
+					break
+				default:
+					res <- &streamBuffer{width, height, data[:n]}
 				}
 			}
 		}()
@@ -253,7 +217,6 @@ func startffmpeg(streamid string) {
 			input := false
 			for errscanner.Scan() {
 				line := errscanner.Text()
-				//			fmt.Printf("ErrScanner: %v\n", line)
 				if strings.Index(line, "Input #") == 0 {
 					input = true
 				} else if strings.Contains(line, "Output #") || strings.Contains(line, "Stream mapping") {
@@ -269,11 +232,9 @@ func startffmpeg(streamid string) {
 							str = strings.ReplaceAll(str, ",", "")
 							log.Printf("Found: %v\n", str)
 							dimstr := strings.Split(str, "x")
-							stream.width, _ = strconv.Atoi(dimstr[0])
-							stream.height, _ = strconv.Atoi(dimstr[1])
-							//add the instace to rtsp stream list for viewers
-							addRtspStream(&stream)
-							log.Printf("added stream w:%v,  h:%v\n", stream.width, stream.height)
+							width, _ = strconv.Atoi(dimstr[0])
+							height, _ = strconv.Atoi(dimstr[1])
+							log.Printf("Stream start: w:%v,  h:%v\n", width, height)
 						}
 					}
 				}
@@ -283,15 +244,15 @@ func startffmpeg(streamid string) {
 		if e != nil {
 			log.Printf("Cmd err:%v", e)
 		}
-		//ffmpeg exited, remove rtspstream from list
-		removeRtspStream(&stream)
-
-		//do not retry if there are not any viewers anymore
-		if stream.stop {
+		if !quit {
+			log.Printf("Waiting for stream... %d", i+1)
+			time.Sleep(1 * time.Second)
+		} else {
 			break
 		}
 	}
-	log.Printf("Stop streaming :%v", streamid)
+	log.Printf("Stop streaming: %v", streamid)
+	close(res)
 }
 
 type gstreamerCmd struct {
