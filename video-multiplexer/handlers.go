@@ -24,15 +24,17 @@ import (
 )
 
 type device struct {
-	deviceID string
-	once     sync.Once
-	stream   *streamer
+	deviceID    string
+	once        sync.Once
+	multiplexer *multiplexer
 }
 
-type streamer struct {
-	listeners sync.Map
-	stream    chan *streamBuffer
-	end       chan bool
+// multiplexer is simple fan out
+type multiplexer struct {
+	mu        sync.RWMutex
+	listeners map[string]chan *streamBuffer
+	inStream  chan *streamBuffer
+	end       chan struct{}
 }
 
 type streamBuffer struct {
@@ -41,36 +43,52 @@ type streamBuffer struct {
 	buffer []byte
 }
 
-func (x *device) getStreamer() *streamer {
-	x.once.Do(x.start)
-	return x.stream
+func (d *device) getMultiplexer() *multiplexer {
+	d.once.Do(d.start)
+	return d.multiplexer
 }
 
-func (x *device) start() {
-	x.stream = &streamer{sync.Map{}, make(chan *streamBuffer), make(chan bool)}
-	go x.stream.multicast(x.deviceID)
-	go startffmpegV2(x.deviceID, x.stream.stream, x.stream.end)
+func (d *device) start() {
+	d.multiplexer = &multiplexer{sync.RWMutex{}, make(map[string]chan *streamBuffer), make(chan *streamBuffer), make(chan struct{})}
+	go d.multiplexer.multicast()
+	go startffmpegV2(d.deviceID, d.multiplexer.inStream, d.multiplexer.end)
 }
 
-func (x *streamer) multicast(deviceID string) {
-	for b := range x.stream {
-		count := 0
-		x.listeners.Range(func(key, value interface{}) bool {
-			sub := value.(chan *streamBuffer)
+func (m *multiplexer) subscribe(id string, channel chan *streamBuffer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listeners[id] = channel
+}
+func (m *multiplexer) unsubscribe(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.listeners, id)
+
+	if len(m.listeners) == 0 {
+		close(m.end)
+	}
+}
+
+func (m *multiplexer) multicast() {
+	for b := range m.inStream {
+		m.mu.RLock()
+		for _, sub := range m.listeners {
 			if len(sub) > 5 {
 				log.Printf("Subscriber lagging, channel length: %d", len(sub))
 			} else {
 				sub <- b
 			}
-			count++
-			return true
-		})
-		if count == 0 {
-			log.Printf("Ending stream: no subscribers")
-			x.end <- true
-			streams.Delete(deviceID)
 		}
+		m.mu.RUnlock()
 	}
+	// inStream closed
+
+	// close all downstream listener channels
+	m.mu.RLock()
+	for _, sub := range m.listeners {
+		close(sub)
+	}
+	m.mu.RUnlock()
 }
 
 var (
@@ -79,9 +97,8 @@ var (
 
 func streamVideo(ws *websocket.Conn) {
 	deviceID := path.Base(ws.Request().URL.Path)
-	log.Printf("Streamid: %v\n", deviceID)
 
-	ds := &device{deviceID: deviceID, once: sync.Once{}, stream: nil}
+	ds := &device{deviceID: deviceID, once: sync.Once{}, multiplexer: nil}
 	dsTemp, loaded := streams.LoadOrStore(deviceID, ds)
 	if loaded {
 		ds = dsTemp.(*device)
@@ -89,8 +106,9 @@ func streamVideo(ws *websocket.Conn) {
 
 	id := uuid.New().String()
 	stream := make(chan *streamBuffer, 10)
-	streamer := ds.getStreamer()
-	streamer.listeners.Store(id, stream)
+	multiplexer := ds.getMultiplexer()
+	multiplexer.subscribe(id, stream)
+	defer multiplexer.unsubscribe(id)
 
 	first := <-stream
 	magicBytes := makeMagicBytes(first.width, first.height)
@@ -98,7 +116,6 @@ func streamVideo(ws *websocket.Conn) {
 	err := websocket.Message.Send(ws, magicBytes)
 	if err != nil {
 		log.Printf("Failed to send magic bytes: %v", err)
-		streamer.listeners.Delete(id)
 		return
 	}
 
@@ -109,8 +126,6 @@ func streamVideo(ws *websocket.Conn) {
 			break
 		}
 	}
-
-	streamer.listeners.Delete(id)
 }
 
 func makeMagicBytes(w int, h int) []byte {
@@ -136,12 +151,16 @@ func testHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
-		Url string
+		URL string
 	}{
 		fmt.Sprintf("//%s/video/%s", r.Host, deviceid[0]),
 	}
 	var html bytes.Buffer
-	testpage.Execute(&html, data)
+	err := testpage.Execute(&html, data)
+	if err != nil {
+		log.Printf("Error on executing template: %v", err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html")
 	w.Write(html.Bytes())
 }
@@ -157,23 +176,32 @@ func getJS(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-func startffmpegV2(streamid string, res chan *streamBuffer, end chan bool) {
-	readAddr := fmt.Sprintf("rtsp://%s/%s", *rtspServerAddress, streamid)
-	writeAddr := fmt.Sprintf("rtsp://DroneUser:22f6c4de-6144-4f6c-82ea-8afcdf19f316@%s/%s", *rtspServerAddress, streamid)
+func startffmpegV2(deviceID string, res chan *streamBuffer, end chan struct{}) {
+	readAddr := fmt.Sprintf("rtsp://%s/%s", *rtspServerAddress, deviceID)
+	writeAddr := fmt.Sprintf("rtsp://DroneUser:22f6c4de-6144-4f6c-82ea-8afcdf19f316@%s/%s", *rtspServerAddress, deviceID)
 
-	err := sendStartVideoCommand(streamid, writeAddr)
+	err := sendStartVideoCommand(deviceID, writeAddr)
 	if err != nil {
 		log.Printf("Failed to send start command: %v", err)
 		close(res)
 		return
 	}
 
+	defer func() {
+		streams.Delete(deviceID)
+		err := sendStopVideoCommand(deviceID)
+		if err != nil {
+			log.Printf("Failed to send start command: %v", err)
+		}
+		log.Printf("Stop streaming: %v", deviceID)
+		close(res)
+	}()
+
 	args := []string{"-rtsp_transport", "tcp", "-i", readAddr, "-f", "mpegts", "-codec:v", "mpeg1video", "-"}
 	log.Printf("ffmpeg args: %v", args)
 
 	width := 1280
 	height := 720
-	quit := false
 
 	//retry loop for starting ffmpeg again, if ffmpeg exits (for example if the rtsp stream does not exist yet)
 	for i := 0; i < 15; i++ {
@@ -183,33 +211,32 @@ func startffmpegV2(streamid string, res chan *streamBuffer, end chan bool) {
 		errReader, _ := cmd.StderrPipe()
 		errscanner := bufio.NewScanner(errReader)
 
-		//stdout read function which streams to viewer bytechannels
-		go func() {
-			data := make([]byte, 16384)
-			for {
-				time.Sleep(5 * time.Millisecond)
-				n, err := cmdReader.Read(data)
-				if err != nil {
-					log.Printf("Cmd read failed: %v", err)
-					break
-				}
-				// log.Printf("Streaming bytes: %v", n)
+		err := cmd.Start()
+		if err != nil {
+			log.Printf("Cmd err:%v", err)
+			continue
+		}
 
-				select {
-				case <-end:
-					quit = true
-					fmt.Printf("Kill ffmpeg\n")
-					cmd.Process.Kill()
-					err := sendStopVideoCommand(streamid)
-					if err != nil {
-						log.Printf("Failed to send start command: %v", err)
-					}
-					break
-				default:
-					res <- &streamBuffer{width, height, data[:n]}
-				}
+		// read data until process dies
+		for {
+			data := make([]byte, 16384)
+			n, err := cmdReader.Read(data)
+			if err != nil {
+				log.Printf("Cmd read failed: %v", err)
+				break
 			}
-		}()
+			select {
+			case <-end:
+				log.Printf("No more listeners. Kill ffmpeg")
+				cmd.Process.Kill()
+				return
+			default:
+				res <- &streamBuffer{width, height, data[:n]}
+			}
+		}
+
+		log.Printf("Waiting for stream... %d", i+1)
+		time.Sleep(1 * time.Second)
 
 		//stderr read function
 		//parses the rtsp stream resolution and adds rtsp stream instance to rtsp stream list
@@ -240,19 +267,7 @@ func startffmpegV2(streamid string, res chan *streamBuffer, end chan bool) {
 				}
 			}
 		}()
-		e := cmd.Run()
-		if e != nil {
-			log.Printf("Cmd err:%v", e)
-		}
-		if !quit {
-			log.Printf("Waiting for stream... %d", i+1)
-			time.Sleep(1 * time.Second)
-		} else {
-			break
-		}
 	}
-	log.Printf("Stop streaming: %v", streamid)
-	close(res)
 }
 
 type gstreamerCmd struct {
@@ -275,6 +290,7 @@ func sendStartVideoCommand(deviceID string, address string) error {
 	if err != nil {
 		return errors.WithMessage(err, "Failed to send videostream command to device")
 	}
+	log.Printf("Start stream sent to device: %v", deviceID)
 
 	return nil
 }
@@ -293,6 +309,7 @@ func sendStopVideoCommand(deviceID string) error {
 	if err != nil {
 		return errors.WithMessage(err, "Failed to send MQTT command")
 	}
+	log.Printf("Stop stream sent to device: %v", deviceID)
 
 	return nil
 }
