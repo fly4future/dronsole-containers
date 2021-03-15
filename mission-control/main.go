@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,17 +9,23 @@ import (
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/tiiuae/gosshgit"
 )
 
 var mqttPub MqttPublisher
+var gitServer gosshgit.Server
+var sshServerAddress string
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Println("usage: mission-control <mqtt-broker-address> | cloud-push | cloud-pull")
+	if len(os.Args) != 3 {
+		fmt.Println("usage: mission-control <bind-to-address> <mqtt-broker-address> | cloud-push | cloud-pull")
 		return
 	}
 
-	mqttBrokerAddress := os.Args[1]
+	sshPort := 2222
+	sshServerAddress = fmt.Sprintf("%s:%d", os.Args[1], sshPort)
+
+	mqttBrokerAddress := os.Args[2]
 	if mqttBrokerAddress == "cloud-pull" {
 		log.Println("MQTT: IoT Core pull")
 		mqttPub = NewIoTPublisher()
@@ -35,6 +42,34 @@ func main() {
 		mqttPub = NewMqttPublisher(mqttClient)
 	}
 
+	gitServer = gosshgit.New("repositories")
+	err := gitServer.Initialize()
+	if err != nil {
+		log.Fatalf("Could not initialize git ssh server: %v", err)
+	}
+
+	// run git server on goroutine
+	go func() {
+		err := gitServer.ListenAndServe(fmt.Sprintf(":%d", sshPort))
+		if err != nil {
+			log.Printf("ListenAndServe: %v", err)
+		}
+	}()
+
+	// shutdown git server at the end
+	defer func() {
+		err := gitServer.Shutdown(context.Background())
+		if err != nil {
+			log.Printf("Could not shutdown git server: %v", err)
+			log.Printf("Forcing the git server to close")
+			err = gitServer.Close()
+			if err != nil {
+				log.Printf("Could not forcefully close the server: %v", err)
+			}
+		}
+	}()
+
+	// initialize http server
 	router := httprouter.New()
 	registerRoutes(router)
 	router.GlobalOPTIONS = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,12 +87,10 @@ func main() {
 
 	port := "8082"
 	log.Printf("Listening on port %s", port)
-	err := http.ListenAndServe(":"+port, setCORSHeader(router))
+	err = http.ListenAndServe(":"+port, setCORSHeader(router))
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	return
 }
 
 func setCORSHeader(handler http.Handler) http.Handler {
@@ -71,5 +104,5 @@ func setCORSHeader(handler http.Handler) http.Handler {
 
 func isValidOrigin(r *http.Request) bool {
 	o := r.Header.Get("Origin")
-	return strings.HasSuffix(o, "localhost:8080") || strings.HasSuffix(o, "auto-fleet-mgnt.ew.r.appspot.com") || strings.HasSuffix(o, "sacplatform.com")
+	return strings.HasSuffix(o, "localhost:8080") || strings.HasSuffix(o, "sacplatform.com")
 }

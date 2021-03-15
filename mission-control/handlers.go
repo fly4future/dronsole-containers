@@ -15,8 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tiiuae/gosshgit"
-
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
 	"github.com/julienschmidt/httprouter"
@@ -43,14 +41,11 @@ type Drone struct {
 }
 
 type Mission struct {
-	Slug             string
-	Name             string
-	Drones           []*Drone
-	WifiSecret       string
-	WifiSSID         string
-	GitServer        gosshgit.Server
-	GitSSHServerPort int
-	GitShutdown      func()
+	Slug       string
+	Name       string
+	Drones     []*Drone
+	WifiSecret string
+	WifiSSID   string
 }
 
 type BacklogItem struct {
@@ -68,17 +63,15 @@ var (
 
 func getMissionsHandler(w http.ResponseWriter, r *http.Request) {
 	type mission struct {
-		Slug    string `json:"slug"`
-		Name    string `json:"name"`
-		GitPort int    `json:"git_port"`
+		Slug string `json:"slug"`
+		Name string `json:"name"`
 	}
 	response := make([]mission, 0)
 
 	for slug, f := range missions {
 		response = append(response, mission{
-			Slug:    slug,
-			Name:    f.Name,
-			GitPort: f.GitSSHServerPort,
+			Slug: slug,
+			Name: f.Name,
 		})
 	}
 	writeJSON(w, response)
@@ -120,16 +113,8 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g := gosshgit.New(fmt.Sprintf("%s/repositories", slug))
-
-	err = g.Initialize()
-	if err != nil {
-		log.Printf("Could not initialize git server: %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	err = g.InitBareRepo("mission.git")
+	repoName := fmt.Sprintf("%s.git", slug)
+	err = gitServer.InitBareRepo(repoName)
 	if err != nil {
 		log.Printf("Could not initialize repository: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -137,46 +122,26 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, allowedSSHKey := range requestBody.AllowedSSHKeys {
-		g.Allow(allowedSSHKey)
+		gitServer.Allow(allowedSSHKey, repoName)
 	}
-
-	gitListener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		log.Printf("Could not start listening for tcp: %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	gitPort := gitListener.Addr().(*net.TCPAddr).Port
 
 	f = &Mission{
-		Slug:             slug,
-		Name:             requestBody.Name,
-		WifiSecret:       uuid.New().String(),
-		WifiSSID:         uuid.New().String(),
-		GitServer:        g,
-		GitSSHServerPort: gitPort,
+		Slug:       slug,
+		Name:       requestBody.Name,
+		WifiSecret: uuid.New().String(),
+		WifiSSID:   uuid.New().String(),
 	}
 
 	err = f.createInitialConfig()
 	if err != nil {
 		log.Printf("Could not create initial config: %v", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		g.Close()
-		g.DeleteRepo("mission.git")
+		gitServer.DeleteRepo(repoName)
 		return
 	}
 
-	go g.Serve(gitListener)
-
 	missions[slug] = f
 	backlog[slug] = make([]*BacklogItem, 0)
-
-	var response struct {
-		GitPort   int    `json:"git_port"`
-		PublicKey string `json:"public_key"`
-	}
-	response.GitPort = gitPort
-	response.PublicKey = strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(g.PublicKey())), "\n")
 
 	websocketMsg, _ := json.Marshal(struct {
 		Event       string `json:"event"`
@@ -188,8 +153,6 @@ func createMissionHandler(w http.ResponseWriter, r *http.Request) {
 		MissionName: f.Name,
 	})
 	go publishMessage(websocketMsg)
-
-	writeJSON(w, response)
 }
 
 func getMissionHandler(w http.ResponseWriter, r *http.Request) {
@@ -236,18 +199,10 @@ func deleteMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shutdownCtx, cancelFunc := context.WithTimeout(c, 2*time.Second)
-	defer cancelFunc()
-	err := f.GitServer.Shutdown(shutdownCtx)
+	err := gitServer.DeleteRepo(fmt.Sprintf("%v.git", f.Slug))
 	if err != nil {
-		log.Printf("Could not shutdown git server: %v", err)
-		log.Printf("Forcing the server to close")
-		err = f.GitServer.Close()
-		if err != nil {
-			log.Printf("Could not forcefully close the server: %v", err)
-		}
+		log.Printf("Unable to delete repo: %v", err)
 	}
-	f.GitServer.DeleteRepo("mission.git")
 
 	for _, d := range f.Drones {
 		delete(drones, d.DeviceID)
@@ -553,14 +508,15 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		return
 	}
 
-	f.GitServer.Allow(trust.PublicSSHKey)
+	repoName := fmt.Sprintf("%s.git", missionSlug)
+	gitServer.Allow(trust.PublicSSHKey, repoName)
 
 	joinMissionPayload, err := json.Marshal(struct {
 		GitServerAddress string `json:"git_server_address"`
 		GitServerKey     string `json:"git_server_key"`
 	}{
-		GitServerAddress: fmt.Sprintf("%s:%d", "mission-control-svc", f.GitSSHServerPort),
-		GitServerKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(f.GitServer.PublicKey())), "\n"),
+		GitServerAddress: sshServerAddress,
+		GitServerKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(gitServer.PublicKey())), "\n"),
 	})
 	if err != nil {
 		log.Printf("Could not marshal join-mission payload: %v\n", err)
@@ -626,7 +582,7 @@ func (f *Mission) createInitialConfig() error {
 	}
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
+	repoPath := filepath.Join("repositories", f.Slug+".git")
 
 	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
 	if err != nil {
@@ -772,7 +728,7 @@ func (f *Mission) publishGitMessage(messageType string, payload string) error {
 	// taskfile := fmt.Sprintf("backlog/%s.yaml", uuid.New().String())
 
 	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
+	repoPath := filepath.Join("repositories", f.Slug+".git")
 
 	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
 	if err != nil {
