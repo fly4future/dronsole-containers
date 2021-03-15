@@ -514,9 +514,11 @@ func handleTrustMessage(deviceID string, payload []byte) {
 	joinMissionPayload, err := json.Marshal(struct {
 		GitServerAddress string `json:"git_server_address"`
 		GitServerKey     string `json:"git_server_key"`
+		MissionSlug      string `json:"mission_slug"`
 	}{
 		GitServerAddress: sshServerAddress,
 		GitServerKey:     strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(gitServer.PublicKey())), "\n"),
+		MissionSlug:      missionSlug,
 	})
 	if err != nil {
 		log.Printf("Could not marshal join-mission payload: %v\n", err)
