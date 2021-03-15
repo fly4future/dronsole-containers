@@ -23,7 +23,7 @@ func main() {
 	}
 
 	sshPort := 2222
-	sshServerAddress = fmt.Sprintf("%s:%d", os.Args[1], sshPort)
+	sshServerAddress = os.Args[1]
 
 	mqttBrokerAddress := os.Args[2]
 	if mqttBrokerAddress == "cloud-pull" {
