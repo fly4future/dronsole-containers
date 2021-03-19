@@ -825,10 +825,105 @@ func isDroneActive(deviceID string) bool {
 }
 
 func handleMQTTEvent(deviceID string, topic string, payload []byte) {
-	log.Printf("Event: %s %s\n", deviceID, topic)
 	activeDrones[deviceID] = time.Now()
-	if topic == "trust" {
+	switch topic {
+	case "trust":
 		log.Printf("Got a trust-event from %v", deviceID)
 		go handleTrustMessage(deviceID, payload)
+	case "mission-plan":
+		go handleMissionPlanEvent(context.Background(), deviceID, payload)
+	case "flight-plan":
+		go handleFlightPlanEvent(context.Background(), deviceID, payload)
 	}
+}
+
+func handleMissionPlanEvent(c context.Context, deviceID string, payload []byte) {
+	missionSlug := resolveMissionSlug(deviceID)
+	if missionSlug == "" {
+		log.Printf("Mission not found for drone: %s", deviceID)
+		return
+	}
+
+	var missionplan []struct {
+		ID         string `json:"id"`
+		AssignedTo string `json:"assigned_to"`
+		Status     string `json:"status"`
+	}
+
+	err := json.Unmarshal(payload, &missionplan)
+	if err != nil {
+		log.Printf("Could not unmarshal mission-plan message: %v", err)
+		return
+	}
+
+	missionplanMsg := struct {
+		Event       string      `json:"event"`
+		MissionSlug string      `json:"mission_slug"`
+		Plan        interface{} `json:"plan"`
+	}{
+		Event:       "mission-plan",
+		MissionSlug: missionSlug,
+		Plan:        missionplan,
+	}
+
+	msg, err := json.Marshal(&missionplanMsg)
+	if err != nil {
+		log.Printf("Could not marshal mission-plan message: %v", err)
+		return
+	}
+
+	go publishMessage(msg)
+}
+
+func handleFlightPlanEvent(c context.Context, deviceID string, payload []byte) {
+	missionSlug := resolveMissionSlug(deviceID)
+	if missionSlug == "" {
+		log.Printf("Mission not found for drone: %s", deviceID)
+		return
+	}
+
+	var flightplan []struct {
+		Reached bool    `json:"reached"`
+		X       float64 `json:"lat"`
+		Y       float64 `json:"lon"`
+		Z       float64 `json:"alt"`
+	}
+
+	err := json.Unmarshal(payload, &flightplan)
+	if err != nil {
+		log.Printf("Could not unmarshal mission-plan message: %v", err)
+		return
+	}
+
+	flightplanMsg := struct {
+		Event       string      `json:"event"`
+		MissionSlug string      `json:"mission_slug"`
+		DroneID     string      `json:"drone_id"`
+		Path        interface{} `json:"path"`
+	}{
+		Event:       "flight-plan",
+		MissionSlug: missionSlug,
+		DroneID:     deviceID,
+		Path:        flightplan,
+	}
+
+	msg, err := json.Marshal(&flightplanMsg)
+	if err != nil {
+		log.Printf("Could not marshal mission-plan message: %v", err)
+		return
+	}
+
+	go publishMessage(msg)
+}
+
+func resolveMissionSlug(droneID string) string {
+	for ms, m := range missions {
+		for _, d := range m.Drones {
+			if d.DeviceID == droneID {
+				return ms
+			}
+		}
+	}
+
+	return ""
 }
