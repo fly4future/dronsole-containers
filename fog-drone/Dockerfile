@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-rtsp \
+    gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install git and ssh
