@@ -33,11 +33,20 @@ var (
 	websocketSubscribers   map[*websocketSubscriber]struct{} = make(map[*websocketSubscriber]struct{})
 )
 
+const (
+	DroneMissionStatusUnknown = "unknown" // Has not yet acknowledged join-mission
+	DroneMissionStatusOnline  = "online"  // Online, acknowledged join-mission
+	DroneMissionStatusOffline = "offline" // Offline, acknowledged join-mission
+	DroneMissionStatusFailed  = "failed"  // Failed after acknowledging join-mission -> removed from mission
+)
+
 type Drone struct {
-	Trusted      bool
-	DeviceID     string
-	PublicSSHKey string
-	IP           net.IP // TODO: should we use net.IPAddr?
+	Trusted         bool
+	DeviceID        string
+	PublicSSHKey    string
+	IP              net.IP // TODO: should we use net.IPAddr?
+	Status          string
+	StatusUpdatedAt time.Time
 }
 
 type Mission struct {
@@ -163,6 +172,7 @@ func getMissionHandler(w http.ResponseWriter, r *http.Request) {
 	type drone struct {
 		DeviceID string `json:"device_id"`
 		Trusted  bool   `json:"trusted"`
+		Status   string `json:"status"`
 	}
 	var response struct {
 		Slug   string  `json:"slug"`
@@ -182,6 +192,11 @@ func getMissionHandler(w http.ResponseWriter, r *http.Request) {
 	for i, d := range m.Drones {
 		response.Drones[i].DeviceID = d.DeviceID
 		response.Drones[i].Trusted = d.Trusted
+		if d.Status == DroneMissionStatusOnline && d.StatusUpdatedAt.Before(time.Now().UTC().Add(-1*time.Minute)) {
+			response.Drones[i].Status = DroneMissionStatusOffline
+		} else {
+			response.Drones[i].Status = d.Status
+		}
 	}
 	writeJSON(w, response)
 }
@@ -291,6 +306,75 @@ func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 		Event:       "mission-drone-assigned",
 		MissionSlug: slug,
 		DroneID:     requestBody.DeviceID,
+	})
+	go publishMessage(websocketMsg)
+}
+
+func removeDroneFromMissionHandler(w http.ResponseWriter, r *http.Request) {
+	c := r.Context()
+	params := httprouter.ParamsFromContext(c)
+	slug := params.ByName("slug")
+	deviceID := params.ByName("deviceID")
+
+	log.Printf("Remove drone: %s / %s", slug, deviceID)
+
+	m, ok := missions[slug]
+	if !ok {
+		log.Printf("Unknown mission: %s", slug)
+		http.Error(w, "Unknown mission", http.StatusBadRequest)
+		return
+	}
+
+	if ms, ok := drones[deviceID]; !ok {
+		log.Printf("Drone '%s' not part of mission %s", deviceID, ms)
+		http.Error(w, "Drone not assigned", http.StatusBadRequest)
+		return
+	}
+
+	err := m.publishGitMessage("drone-removed", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
+	if err != nil {
+		log.Printf("Could not publish git message: %v", err)
+		http.Error(w, "Drone not assigned", http.StatusBadRequest)
+		return
+	}
+
+	msg, err := json.Marshal(struct {
+		Command string
+		Payload interface{}
+	}{
+		Command: "leave-mission",
+		Payload: "",
+	})
+	if err != nil {
+		log.Printf("Could not marshal leave-mission command: %v\n", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	err = mqttPub.SendCommand(deviceID, "control", msg)
+	if err != nil {
+		log.Printf("Could not publish message to MQTT broker: %v", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	newDrones := make([]*Drone, 0)
+	for _, x := range m.Drones {
+		if x.DeviceID != deviceID {
+			newDrones = append(newDrones, x)
+		}
+	}
+	m.Drones = newDrones
+	delete(drones, deviceID)
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-removed",
+		MissionSlug: slug,
+		DroneID:     deviceID,
 	})
 	go publishMessage(websocketMsg)
 }
@@ -499,6 +583,7 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		d.Trusted = true
 		d.PublicSSHKey = trust.PublicSSHKey
 		d.IP = net.ParseIP("127.0.0.1")
+		d.Status = DroneMissionStatusUnknown
 		break
 	}
 	// we have a new trusted drone -> update config
@@ -637,77 +722,6 @@ func (f *Mission) createInitialConfig() error {
 	return nil
 }
 
-/*
-func (f *Mission) updateConfig() error {
-	config := Config{}
-	config.Wifi.SSID = f.WifiSSID
-	config.Wifi.Secret = f.WifiSecret
-	for _, d := range f.Drones {
-		if !d.Trusted {
-			continue
-		}
-		config.Drones = append(config.Drones, ConfigDrone{
-			Name:             d.DeviceID,
-			GitServerAddress: fmt.Sprintf("ssh://git@%s:2222/mission.git", d.IP),
-			GitServerKey:     "TODO",
-			GitClientKey:     d.PublicSSHKey,
-		})
-	}
-	b, err := yaml.Marshal(config)
-	if err != nil {
-		log.Printf("Could not marshal config: %v", err)
-		return err
-	}
-	_ = b
-
-	tmpPath := filepath.Join("tmp", uuid.New().String())
-	repoPath := filepath.Join(f.Slug, "repositories", "mission.git")
-
-	out, err := exec.Command("git", "clone", repoPath, tmpPath).CombinedOutput()
-	if err != nil {
-		log.Printf("%s\n\nCould not clone local repo", out)
-		return err
-	}
-
-	err = ioutil.WriteFile(filepath.Join(tmpPath, "config.yaml"), b, 0644)
-	if err != nil {
-		log.Printf("Could not write config.yaml")
-		return err
-	}
-
-	cmd := exec.Command("git", "add", "config.yaml")
-	cmd.Dir = tmpPath
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("%s\n\nCould not add config.yaml to commit", out)
-		return err
-	}
-	cmd = exec.Command("git", "-c", "user.email=\"commander@cloud\"", "-c", "user.name=\"Commander\"", "commit", "-m", "Update config")
-	cmd.Dir = tmpPath
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("%s\n\nCould not create a commit", out)
-		return err
-	}
-
-	cmd = exec.Command("git", "push", "origin", "main")
-	cmd.Dir = tmpPath
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("%s\n\nCould not push to origin", out)
-		return err
-	}
-
-	out, err = exec.Command("rm", "-rf", tmpPath).CombinedOutput()
-	if err != nil {
-		log.Printf("%s\n\nCould not remove temporary folder", out)
-		return err
-	}
-
-	return nil
-}
-*/
-
 type Task struct {
 	Type     string
 	Priority int64
@@ -715,20 +729,6 @@ type Task struct {
 }
 
 func (f *Mission) publishGitMessage(messageType string, payload string) error {
-	// task := Task{
-	// 	Type:     taskType,
-	// 	Priority: priority,
-	// 	Payload:  payload,
-	// }
-
-	// b, err := yaml.Marshal(task)
-	// if err != nil {
-	// 	log.Printf("Could not marshal task")
-	// 	return err
-	// }
-
-	// taskfile := fmt.Sprintf("backlog/%s.yaml", uuid.New().String())
-
 	tmpPath := filepath.Join("tmp", uuid.New().String())
 	repoPath := filepath.Join("repositories", f.Slug+".git")
 
@@ -743,14 +743,6 @@ func (f *Mission) publishGitMessage(messageType string, payload string) error {
 		log.Printf("%s\n\nCould not append message", out)
 		return err
 	}
-
-	// _ = os.Mkdir(filepath.Join(tmpPath, "backlog"), 0644)
-
-	// err = ioutil.WriteFile(filepath.Join(tmpPath, taskfile), b, 0644)
-	// if err != nil {
-	// 	log.Printf("Could not write %s", taskfile)
-	// 	return err
-	// }
 
 	cmd := exec.Command("git", "add", taskfile)
 	cmd.Dir = tmpPath
@@ -834,6 +826,8 @@ func handleMQTTEvent(deviceID string, topic string, payload []byte) {
 		go handleMissionPlanEvent(context.Background(), deviceID, payload)
 	case "flight-plan":
 		go handleFlightPlanEvent(context.Background(), deviceID, payload)
+	case "mission-state":
+		go handleMissionStateEvent(context.Background(), deviceID, payload)
 	}
 }
 
@@ -891,7 +885,7 @@ func handleFlightPlanEvent(c context.Context, deviceID string, payload []byte) {
 
 	err := json.Unmarshal(payload, &flightplan)
 	if err != nil {
-		log.Printf("Could not unmarshal mission-plan message: %v", err)
+		log.Printf("Could not unmarshal flight-plan message: %v", err)
 		return
 	}
 
@@ -909,11 +903,55 @@ func handleFlightPlanEvent(c context.Context, deviceID string, payload []byte) {
 
 	msg, err := json.Marshal(&flightplanMsg)
 	if err != nil {
-		log.Printf("Could not marshal mission-plan message: %v", err)
+		log.Printf("Could not marshal flight-plan message: %v", err)
 		return
 	}
 
 	go publishMessage(msg)
+}
+
+func handleMissionStateEvent(c context.Context, deviceID string, payload []byte) {
+	var missionstate struct {
+		MissionSlug string    `json:"mission_slug"`
+		Timestamp   time.Time `json:"timestamp"`
+	}
+
+	err := json.Unmarshal(payload, &missionstate)
+	if err != nil {
+		log.Printf("Could not unmarshal mission-state message: %v", err)
+		return
+	}
+
+	missionSlug, drone := getDrone(deviceID)
+
+	if missionSlug == "" {
+		// Unknown drone
+		return
+	}
+
+	if missionstate.MissionSlug == missionSlug {
+		// States match
+		drone.Status = DroneMissionStatusOnline
+		drone.StatusUpdatedAt = time.Now()
+		return
+	}
+	if missionstate.MissionSlug == "" && drone.Status != DroneMissionStatusFailed {
+		// Drone has lost it's state
+		drone.Status = DroneMissionStatusFailed
+
+		websocketMsg, _ := json.Marshal(struct {
+			Event       string `json:"event"`
+			MissionSlug string `json:"mission_slug"`
+			DroneID     string `json:"drone_id"`
+		}{
+			Event:       "mission-drone-failed",
+			MissionSlug: missionSlug,
+			DroneID:     deviceID,
+		})
+		go publishMessage(websocketMsg)
+
+		return
+	}
 }
 
 func resolveMissionSlug(droneID string) string {
@@ -926,4 +964,16 @@ func resolveMissionSlug(droneID string) string {
 	}
 
 	return ""
+}
+
+func getDrone(droneID string) (string, *Drone) {
+	for ms, m := range missions {
+		for _, d := range m.Drones {
+			if d.DeviceID == droneID {
+				return ms, d
+			}
+		}
+	}
+
+	return "", nil
 }

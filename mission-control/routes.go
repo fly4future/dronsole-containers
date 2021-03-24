@@ -14,6 +14,7 @@ func registerRoutes(router *httprouter.Router) {
 	router.HandlerFunc(http.MethodGet, "/missions/:slug", getMissionHandler)
 	router.HandlerFunc(http.MethodDelete, "/missions/:slug", deleteMissionHandler)
 	router.HandlerFunc(http.MethodPost, "/missions/:slug/drones", assignDroneToMissionHandler)
+	router.HandlerFunc(http.MethodDelete, "/missions/:slug/drones/:deviceID", removeDroneFromMissionHandler)
 	router.HandlerFunc(http.MethodPost, "/missions/:slug/backlog", addTaskToMissionBacklogHandler)
 	router.HandlerFunc(http.MethodGet, "/missions/:slug/backlog", getMissionBacklogHandler)
 
