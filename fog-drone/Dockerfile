@@ -82,7 +82,7 @@ RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_0
     && rm ros-foxy-px4-ros-com_0.1.0-0focal_amd64.deb
 
 # Install latest mission-data-recorder
-COPY --from=ghcr.io/tiiuae/tii-mission-data-recorder:latest /build/mission-data-recorder /usr/local/bin/
+COPY --from=ghcr.io/kulmesa/tii-mission-data-recorder:latest /build/mission-data-recorder /usr/local/bin/
 
 # Setup run environment
 RUN mkdir /fog-drone
