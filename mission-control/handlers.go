@@ -850,6 +850,15 @@ func handleMissionPlanEvent(c context.Context, deviceID string, payload []byte) 
 		return
 	}
 
+	missionBacklog := backlog[missionSlug]
+	for _, bi1 := range missionplan {
+		for _, bi2 := range missionBacklog {
+			if bi1.ID == bi2.ID {
+				bi2.Status = bi1.Status
+			}
+		}
+	}
+
 	missionplanMsg := struct {
 		Event       string      `json:"event"`
 		MissionSlug string      `json:"mission_slug"`
