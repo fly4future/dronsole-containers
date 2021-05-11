@@ -108,6 +108,7 @@ func createDroneHandler(w http.ResponseWriter, r *http.Request) {
 		MAVLinkAddress string  `json:"mavlink_address"`
 		MAVLinkUDPPort int32   `json:"mavlink_udp_port"`
 		MAVLinkTCPPort int32   `json:"mavlink_tcp_port"`
+		VideoUDPPort   int32   `json:"video_udp_port"`
 		PosX           float64 `json:"pos_x"`
 		PosY           float64 `json:"pos_y"`
 		PosZ           float64 `json:"pos_z"`
@@ -141,10 +142,11 @@ func createDroneHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Cloud not lookup mavlink IP", http.StatusInternalServerError)
 		return
 	}
-	command := fmt.Sprintf("/gzserver-api/scripts/spawn-drone.sh %s %d %d %s %f %f %f %f %f %f",
+	command := fmt.Sprintf("/gzserver-api/scripts/spawn-drone.sh %s %d %d %d %s %f %f %f %f %f %f",
 		ips[0].String(),
 		requestBody.MAVLinkUDPPort,
 		requestBody.MAVLinkTCPPort,
+		requestBody.VideoUDPPort,
 		requestBody.DeviceID,
 		requestBody.PosX,
 		requestBody.PosY,
