@@ -8,9 +8,10 @@ RUN go mod download
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o gzserver-api .
 
-FROM gazebo:gzserver11-focal
+FROM ros:foxy
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
+    libgazebo11 \
     gazebo11-plugin-base \
     python3-jinja2 \
     python3-numpy \
