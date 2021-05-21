@@ -14,7 +14,7 @@
 source $HOME/.bashrc
 
 # do not change this
-MAIN_DIR="/fog_drone/log_files"
+MAIN_DIR="/fog-drone/log_files"
 
 # following commands will be executed first in each window
 pre_input=""
@@ -27,6 +27,8 @@ input=(
 '
   # 'mavlink_router' 'mavlink-routerd
 # '
+  'communication_link' 'communication_link -device_id '"$DRONE_DEVICE_ID"' -mqtt_broker '"$MQTT_BROKER_ADDRESS"'
+'
   'micrortps' 'micrortps_agent -t UDP -n '"$DRONE_DEVICE_ID"' 
 '
   'control' 'ros2 launch control_interface control_interface.py use_sim_time:=true
