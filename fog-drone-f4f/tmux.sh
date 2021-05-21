@@ -28,8 +28,8 @@ pre_input="mkdir -p $MAIN_DIR/$PROJECT_NAME;"
 input=(
   'PX4' 'px4 -d "/px4_sitl_etc" -w sitl_'"${PX4_SIM_MODEL}"' -s /px4_sitl_etc/init.d-posix/rcS
 '
-  'mavlink_router' 'mavlink-routerd
-'
+  # 'mavlink_router' 'mavlink-routerd
+# '
   'micrortps' 'micrortps_agent -t UDP -n '"$DRONE_DEVICE_ID"' 
 '
   'control' 'ros2 launch control_interface control_interface.py use_sim_time:=true
@@ -40,9 +40,9 @@ input=(
 '
   'octomap' 'ros2 launch octomap_server2 tii_rplidar_launch.py use_sim_time:=true
 '
-  'arm/takeoff' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/arming std_srvs/srv/SetBool \"data: true\" && ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/takeoff std_srvs/srv/SetBool \"data: true\"'
-  'land' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/land std_srvs/srv/SetBool \"data: true\"'
-  'goto' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/local_setpoint fog_msgs/srv/Vec4 \"goal: \[0, 0, 2, 1\]\"'
+  'arm/takeoff' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/arming std_srvs/srv/SetBool "data: true" && ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/takeoff std_srvs/srv/SetBool "data: true"'
+  'land' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/land std_srvs/srv/SetBool "data: true"'
+  'goto' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/local_setpoint fog_msgs/srv/Vec4 "goal: [0, 0, 2, 1]"'
 )
 
 init_window="PX4"
