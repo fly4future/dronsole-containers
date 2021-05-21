@@ -13,14 +13,11 @@
 
 source $HOME/.bashrc
 
-# change this to your liking
-PROJECT_NAME=fog_drone
-
 # do not change this
-MAIN_DIR=~/"bag_files"
+MAIN_DIR="/fog_drone/log_files"
 
 # following commands will be executed first in each window
-pre_input="mkdir -p $MAIN_DIR/$PROJECT_NAME;"
+pre_input=""
 
 # define commands
 # 'name' 'command'
@@ -51,7 +48,7 @@ init_window="PX4"
 ### DO NOT MODIFY BELOW ###
 ###########################
 
-SESSION_NAME=mav
+SESSION_NAME=uav
 
 # prefere the user-compiled tmux
 if [ -f /usr/local/bin/tmux ]; then
@@ -83,32 +80,11 @@ else
   exit
 fi
 
-# get the iterator
-ITERATOR_FILE="$MAIN_DIR/$PROJECT_NAME"/iterator.txt
-if [ -e "$ITERATOR_FILE" ]
-then
-  ITERATOR=`cat "$ITERATOR_FILE"`
-  ITERATOR=$(($ITERATOR+1))
-else
-  echo "iterator.txt does not exist, creating it"
-  touch "$ITERATOR_FILE"
-  ITERATOR="1"
-fi
-echo "$ITERATOR" > "$ITERATOR_FILE"
-
 # create file for logging terminals' output
-LOG_DIR="$MAIN_DIR/$PROJECT_NAME/"
+mkdir -p "$MAIN_DIR"
 SUFFIX=$(date +"%Y_%m_%d_%H_%M_%S")
-SUBLOG_DIR="$LOG_DIR/"$ITERATOR"_"$SUFFIX""
-TMUX_DIR="$SUBLOG_DIR/tmux"
-mkdir -p "$SUBLOG_DIR"
+TMUX_DIR="$MAIN_DIR/tmux"
 mkdir -p "$TMUX_DIR"
-
-# link the "latest" folder to the recently created one
-rm "$LOG_DIR/latest"
-rm "$MAIN_DIR/latest"
-ln -sf "$SUBLOG_DIR" "$LOG_DIR/latest"
-ln -sf "$SUBLOG_DIR" "$MAIN_DIR/latest"
 
 # create arrays of names and commands
 for ((i=0; i < ${#input[*]}; i++));
@@ -134,7 +110,7 @@ done
 # send commands
 for ((i=0; i < ${#cmds[*]}; i++));
 do
-  $TMUX_BIN send-keys -t $SESSION_NAME:$(($i+1)) "cd $SCRIPTPATH;${pre_input};${cmds[$i]}"
+  $TMUX_BIN send-keys -t $SESSION_NAME:$(($i+1)) "cd $SCRIPTPATH;${pre_input}${cmds[$i]}"
 done
 
 # identify the index of the init window

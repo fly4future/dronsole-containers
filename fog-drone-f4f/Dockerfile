@@ -1,8 +1,8 @@
 FROM ros:foxy
 
 # Setup run environment
-WORKDIR /home
-ENV HOME=/home
+RUN mkdir /fog-drone
+WORKDIR /fog-drone
 
 RUN sudo apt-get -y update 
 
@@ -19,7 +19,8 @@ RUN apt-get install -y --no-install-recommends \
     tmux=3.0a-2
 
 # install tmux config
-COPY dottmux.conf $HOME/.tmux.conf
+COPY dottmux.conf /dottmux.conf
+RUN /bin/sh -c 'mv /dottmux.conf ~/.tmux.conf'
 
 RUN echo "deb [trusted=yes] https://artifactory.ssrc.fi/artifactory/debian-public-local focal fog-sw" >> /etc/apt/sources.list
 
@@ -71,10 +72,9 @@ RUN cd /packages \
     && rm -rf /packages
 
 # Prepare ~/.bashrc
-RUN /bin/sh -c 'echo "source /opt/ros/foxy/setup.bash" >> $HOME/.bashrc'
-RUN /bin/sh -c 'echo "export PX4_SIM_MODEL=ssrc_fog_x" >> $HOME/.bashrc'
+RUN /bin/sh -c 'echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc'
+RUN /bin/sh -c 'echo "export PX4_SIM_MODEL=ssrc_fog_x" >> ~/.bashrc'
  
-
 COPY tmux.sh                  tmux.sh
 COPY drone-entrypoint.sh      drone-entrypoint.sh
 
