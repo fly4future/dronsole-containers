@@ -81,4 +81,4 @@ COPY drone-entrypoint.sh      drone-entrypoint.sh
 EXPOSE 14560/UDP
 EXPOSE 4560
 
-ENTRYPOINT ["drone-entrypoint.sh"]
+ENTRYPOINT ["/fog-drone/drone-entrypoint.sh"]
