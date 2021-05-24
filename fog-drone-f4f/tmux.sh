@@ -23,12 +23,12 @@ pre_input=""
 # 'name' 'command'
 # DO NOT PUT SPACES IN THE NAMES
 input=(
-  'PX4' 'px4 -d "/px4_sitl_etc" -w sitl_'"${PX4_SIM_MODEL}"' -s /px4_sitl_etc/init.d-posix/rcS
+  'px4' 'px4 -d "/px4_sitl_etc" -w sitl_'"$PX4_SIM_MODEL"' -s /px4_sitl_etc/init.d-posix/rcS
 '
   # 'mavlink_router' 'mavlink-routerd
 # '
-  'communication_link' 'communication_link -device_id '"$DRONE_DEVICE_ID"' -mqtt_broker '"$MQTT_BROKER_ADDRESS"'
-'
+  # 'communication_link' 'communication_link -device_id '"$DRONE_DEVICE_ID"' -mqtt_broker '"$MQTT_BROKER_ADDRESS"'
+# '
   'micrortps' 'micrortps_agent -t UDP -n '"$DRONE_DEVICE_ID"' 
 '
   'control' 'ros2 launch control_interface control_interface.py use_sim_time:=true
@@ -41,10 +41,12 @@ input=(
 '
   'arm/takeoff' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/arming std_srvs/srv/SetBool "data: true" && ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/takeoff std_srvs/srv/SetBool "data: true"'
   'land' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/land std_srvs/srv/SetBool "data: true"'
-  'goto' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/local_setpoint fog_msgs/srv/Vec4 "goal: [0, 0, 2, 1]"'
+  'px4_goto' 'ros2 service call /'"$DRONE_DEVICE_ID"'/control_interface/local_setpoint fog_msgs/srv/Vec4 "goal: [0, 0, 2, 1]"'
+  'goto' 'ros2 service call /'"$DRONE_DEVICE_ID"'/navigation/waypoint_in fog_msgs/srv/Vec4 "goal: [0, 0, 2, 0]"'
+
 )
 
-init_window="PX4"
+init_window="px4"
 
 ###########################
 ### DO NOT MODIFY BELOW ###
