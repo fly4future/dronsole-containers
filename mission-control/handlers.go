@@ -586,12 +586,6 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		d.Status = DroneMissionStatusUnknown
 		break
 	}
-	// we have a new trusted drone -> update config
-	err = f.publishGitMessage("drone-added", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
-	if err != nil {
-		log.Printf("Could not publish git message: %v", err)
-		return
-	}
 
 	repoName := fmt.Sprintf("%s.git", missionSlug)
 	gitServer.Allow(trust.PublicSSHKey, repoName)
@@ -728,7 +722,15 @@ type Task struct {
 	Payload  string
 }
 
+var gitMu sync.Mutex
+
 func (f *Mission) publishGitMessage(messageType string, payload string) error {
+	gitMu.Lock()
+	defer gitMu.Unlock()
+	return f.publishGitMessage2(messageType, payload)
+}
+
+func (f *Mission) publishGitMessage2(messageType string, payload string) error {
 	tmpPath := filepath.Join("tmp", uuid.New().String())
 	repoPath := filepath.Join("repositories", f.Slug+".git")
 
@@ -818,10 +820,15 @@ func isDroneActive(deviceID string) bool {
 
 func handleMQTTEvent(deviceID string, topic string, payload []byte) {
 	activeDrones[deviceID] = time.Now()
+	log.Printf("Event: %s %s", deviceID, topic)
 	switch topic {
 	case "trust":
 		log.Printf("Got a trust-event from %v", deviceID)
 		go handleTrustMessage(deviceID, payload)
+	case "joined-mission":
+		go handleJoinedMissionEvent(context.Background(), deviceID, payload)
+	case "left-mission":
+		go handleLeftMissionEvent(context.Background(), deviceID, payload)
 	case "mission-plan":
 		go handleMissionPlanEvent(context.Background(), deviceID, payload)
 	case "flight-plan":
@@ -829,6 +836,60 @@ func handleMQTTEvent(deviceID string, topic string, payload []byte) {
 	case "mission-state":
 		go handleMissionStateEvent(context.Background(), deviceID, payload)
 	}
+}
+
+func handleJoinedMissionEvent(c context.Context, deviceID string, payload []byte) {
+	var event struct {
+		MissionSlug string `json:"mission_slug"`
+	}
+
+	err := json.Unmarshal(payload, &event)
+	if err != nil {
+		log.Printf("Could not unmarshal joined-mission message: %v", err)
+		return
+	}
+
+	mission := missions[event.MissionSlug]
+
+	err = mission.publishGitMessage("drone-added", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
+	if err != nil {
+		log.Printf("Could not publish git message: %v", err)
+		return
+	}
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-joined",
+		MissionSlug: event.MissionSlug,
+		DroneID:     deviceID,
+	})
+	go publishMessage(websocketMsg)
+}
+
+func handleLeftMissionEvent(c context.Context, deviceID string, payload []byte) {
+	var event struct {
+		MissionSlug string `json:"mission_slug"`
+	}
+
+	err := json.Unmarshal(payload, &event)
+	if err != nil {
+		log.Printf("Could not unmarshal joined-mission message: %v", err)
+		return
+	}
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-left",
+		MissionSlug: event.MissionSlug,
+		DroneID:     deviceID,
+	})
+	go publishMessage(websocketMsg)
 }
 
 func handleMissionPlanEvent(c context.Context, deviceID string, payload []byte) {
