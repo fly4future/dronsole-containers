@@ -35,6 +35,8 @@ COPY scripts/spawn-drone.sh                         scripts/spawn-drone.sh
 
 COPY --from=builder /gzserver-api/gzserver-api /bin/gzserver-api
 
+RUN /bin/sh -c 'echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc'
+
 EXPOSE 8081
 EXPOSE 11345
 

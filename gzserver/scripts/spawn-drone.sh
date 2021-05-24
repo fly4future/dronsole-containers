@@ -37,7 +37,7 @@ python3 /data/scripts/jinja_gen.py /data/models/${PX4_SIM_MODEL}/${PX4_SIM_MODEL
         --mavlink_tcp_port "${mavlink_tcp_port}" \
         --gstudphost "${mav_addr}" \
         --gstudpport "${video_udp_port}" \
-        --namespace "${name}" \
+        --vehicle_name "${name}" \
         --output-file "/tmp/${PX4_SIM_MODEL}_${name}.sdf" || exit
 
 echo "Spawning ${PX4_SIM_MODEL}_${name}"
