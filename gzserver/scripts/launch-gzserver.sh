@@ -23,4 +23,6 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/plugins
 
 echo "Starting gazebo"
 IP_ADDR=$(hostname -I)
-GAZEBOIP=${IP_ADDR} GAZEBOMASTER_URI=${IP_ADDR}:11345 gzserver "$world_file" --verbose
+GAZEBOIP=${IP_ADDR}
+GAZEBOMASTER_URI=${IP_ADDR}:11345 
+gzserver "$world_file" --verbose -s libgazebo_ros_init.so -s libgazebo_ros_factory.so
