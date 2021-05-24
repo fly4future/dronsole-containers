@@ -15,8 +15,44 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 RUN echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2-latest.list
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-foxy-action-msgs \
+    ros-foxy-actionlib-msgs \
+    ros-foxy-builtin-interfaces \
+    ros-foxy-diagnostic-msgs \
+    ros-foxy-example-interfaces \
+    ros-foxy-geometry-msgs \
+    ros-foxy-libyaml-vendor \
+    ros-foxy-lifecycle-msgs \
+    ros-foxy-map-msgs \
+    ros-foxy-nav-msgs \
+    ros-foxy-pcl-msgs \
+    ros-foxy-pendulum-msgs \
+    ros-foxy-rcl \
+    ros-foxy-rcl-interfaces \
+    ros-foxy-rcl-logging-spdlog \
+    ros-foxy-rcl-yaml-param-parser \
+    ros-foxy-rcpputils \
+    ros-foxy-rcutils \
+    ros-foxy-rmw \
+    ros-foxy-rmw-dds-common \
+    ros-foxy-rmw-implementation \
     ros-foxy-ros-base \
     ros-foxy-ros-core \
+    ros-foxy-rosgraph-msgs \
+    ros-foxy-rosidl-runtime-c \
+    ros-foxy-rosidl-typesupport-c \
+    ros-foxy-sensor-msgs \
+    ros-foxy-shape-msgs \
+    ros-foxy-statistics-msgs \
+    ros-foxy-std-msgs \
+    ros-foxy-stereo-msgs \
+    ros-foxy-test-msgs \
+    ros-foxy-tf2-msgs \
+    ros-foxy-tracetools \
+    ros-foxy-trajectory-msgs \
+    ros-foxy-turtlesim \
+    ros-foxy-unique-identifier-msgs \
+    ros-foxy-visualization-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gstreamer libraries for video streaming
@@ -54,6 +90,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mavlink-router \
     ros-foxy-px4-mavlink-ctrl \
     ros-foxy-px4-ros-com \
+    mission-engine \
     && rm -rf /var/lib/apt/lists/*
 
 # Install latest mission-data-recorder
