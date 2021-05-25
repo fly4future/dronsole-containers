@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
 	"github.com/julienschmidt/httprouter"
+	"github.com/pkg/errors"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
 	"nhooyr.io/websocket"
@@ -265,10 +266,27 @@ func assignDroneToMissionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if fs, ok := drones[requestBody.DeviceID]; ok {
-		log.Printf("Drone '%s' already part of mission %s", requestBody.DeviceID, fs)
-		http.Error(w, "Drone already assigned", http.StatusBadRequest)
-		return
+	ms, drone := getDrone(requestBody.DeviceID)
+	if drone != nil {
+		if ms != slug {
+			log.Printf("Drone '%s' already part of another mission %s", requestBody.DeviceID, ms)
+			http.Error(w, "Drone already assigned", http.StatusBadRequest)
+			return
+		}
+		// Idempotent if drone already part of current mission
+		if ms == slug && drone.Status != DroneMissionStatusFailed {
+			log.Printf("Drone '%s' already part of current mission %s", requestBody.DeviceID, ms)
+			// http.Error(w, "Drone already assigned", http.StatusBadRequest)
+			return
+		}
+
+		// remove + assign if in failed status
+		err = removeDroneFromMission(ms, drone.DeviceID)
+		if err != nil {
+			log.Printf("Failed to remove drone from mission: %v", err)
+			http.Error(w, "Failed to rejoin drone", http.StatusBadRequest)
+			return
+		}
 	}
 
 	msg, err := json.Marshal(struct {
@@ -316,26 +334,28 @@ func removeDroneFromMissionHandler(w http.ResponseWriter, r *http.Request) {
 	slug := params.ByName("slug")
 	deviceID := params.ByName("deviceID")
 
+	err := removeDroneFromMission(slug, deviceID)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+}
+
+func removeDroneFromMission(slug, deviceID string) error {
 	log.Printf("Remove drone: %s / %s", slug, deviceID)
 
 	m, ok := missions[slug]
 	if !ok {
-		log.Printf("Unknown mission: %s", slug)
-		http.Error(w, "Unknown mission", http.StatusBadRequest)
-		return
+		return errors.Errorf("Unknown mission: %s", slug)
 	}
 
 	if ms, ok := drones[deviceID]; !ok {
-		log.Printf("Drone '%s' not part of mission %s", deviceID, ms)
-		http.Error(w, "Drone not assigned", http.StatusBadRequest)
-		return
+		return errors.Errorf("Drone '%s' not part of mission %s", deviceID, ms)
 	}
 
 	err := m.publishGitMessage("drone-removed", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
 	if err != nil {
-		log.Printf("Could not publish git message: %v", err)
-		http.Error(w, "Drone not assigned", http.StatusBadRequest)
-		return
+		return errors.Errorf("Could not publish git message: %v", err)
 	}
 
 	msg, err := json.Marshal(struct {
@@ -346,16 +366,12 @@ func removeDroneFromMissionHandler(w http.ResponseWriter, r *http.Request) {
 		Payload: "",
 	})
 	if err != nil {
-		log.Printf("Could not marshal leave-mission command: %v\n", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return errors.Errorf("Could not marshal leave-mission command: %v\n", err)
 	}
 
 	err = mqttPub.SendCommand(deviceID, "control", msg)
 	if err != nil {
-		log.Printf("Could not publish message to MQTT broker: %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return errors.Errorf("Could not publish message to MQTT broker: %v", err)
 	}
 
 	newDrones := make([]*Drone, 0)
@@ -377,6 +393,8 @@ func removeDroneFromMissionHandler(w http.ResponseWriter, r *http.Request) {
 		DroneID:     deviceID,
 	})
 	go publishMessage(websocketMsg)
+
+	return nil
 }
 
 func addTaskToMissionBacklogHandler(w http.ResponseWriter, r *http.Request) {
@@ -586,12 +604,6 @@ func handleTrustMessage(deviceID string, payload []byte) {
 		d.Status = DroneMissionStatusUnknown
 		break
 	}
-	// we have a new trusted drone -> update config
-	err = f.publishGitMessage("drone-added", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
-	if err != nil {
-		log.Printf("Could not publish git message: %v", err)
-		return
-	}
 
 	repoName := fmt.Sprintf("%s.git", missionSlug)
 	gitServer.Allow(trust.PublicSSHKey, repoName)
@@ -728,7 +740,15 @@ type Task struct {
 	Payload  string
 }
 
+var gitMu sync.Mutex
+
 func (f *Mission) publishGitMessage(messageType string, payload string) error {
+	gitMu.Lock()
+	defer gitMu.Unlock()
+	return f.publishGitMessage2(messageType, payload)
+}
+
+func (f *Mission) publishGitMessage2(messageType string, payload string) error {
 	tmpPath := filepath.Join("tmp", uuid.New().String())
 	repoPath := filepath.Join("repositories", f.Slug+".git")
 
@@ -818,10 +838,15 @@ func isDroneActive(deviceID string) bool {
 
 func handleMQTTEvent(deviceID string, topic string, payload []byte) {
 	activeDrones[deviceID] = time.Now()
+	log.Printf("Event: %s %s", deviceID, topic)
 	switch topic {
 	case "trust":
 		log.Printf("Got a trust-event from %v", deviceID)
 		go handleTrustMessage(deviceID, payload)
+	case "joined-mission":
+		go handleJoinedMissionEvent(context.Background(), deviceID, payload)
+	case "left-mission":
+		go handleLeftMissionEvent(context.Background(), deviceID, payload)
 	case "mission-plan":
 		go handleMissionPlanEvent(context.Background(), deviceID, payload)
 	case "flight-plan":
@@ -829,6 +854,60 @@ func handleMQTTEvent(deviceID string, topic string, payload []byte) {
 	case "mission-state":
 		go handleMissionStateEvent(context.Background(), deviceID, payload)
 	}
+}
+
+func handleJoinedMissionEvent(c context.Context, deviceID string, payload []byte) {
+	var event struct {
+		MissionSlug string `json:"mission_slug"`
+	}
+
+	err := json.Unmarshal(payload, &event)
+	if err != nil {
+		log.Printf("Could not unmarshal joined-mission message: %v", err)
+		return
+	}
+
+	mission := missions[event.MissionSlug]
+
+	err = mission.publishGitMessage("drone-added", fmt.Sprintf("{ \"name\": \"%s\" }", deviceID))
+	if err != nil {
+		log.Printf("Could not publish git message: %v", err)
+		return
+	}
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-joined",
+		MissionSlug: event.MissionSlug,
+		DroneID:     deviceID,
+	})
+	go publishMessage(websocketMsg)
+}
+
+func handleLeftMissionEvent(c context.Context, deviceID string, payload []byte) {
+	var event struct {
+		MissionSlug string `json:"mission_slug"`
+	}
+
+	err := json.Unmarshal(payload, &event)
+	if err != nil {
+		log.Printf("Could not unmarshal joined-mission message: %v", err)
+		return
+	}
+
+	websocketMsg, _ := json.Marshal(struct {
+		Event       string `json:"event"`
+		MissionSlug string `json:"mission_slug"`
+		DroneID     string `json:"drone_id"`
+	}{
+		Event:       "mission-drone-left",
+		MissionSlug: event.MissionSlug,
+		DroneID:     deviceID,
+	})
+	go publishMessage(websocketMsg)
 }
 
 func handleMissionPlanEvent(c context.Context, deviceID string, payload []byte) {
@@ -947,6 +1026,7 @@ func handleMissionStateEvent(c context.Context, deviceID string, payload []byte)
 	if missionstate.MissionSlug == "" && drone.Status != DroneMissionStatusFailed {
 		// Drone has lost it's state
 		drone.Status = DroneMissionStatusFailed
+		drone.Trusted = false
 
 		websocketMsg, _ := json.Marshal(struct {
 			Event       string `json:"event"`

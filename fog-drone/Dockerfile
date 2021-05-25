@@ -15,8 +15,44 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 RUN echo "deb [arch=$(dpkg --print-architecture)] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2-latest.list
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-foxy-action-msgs \
+    ros-foxy-actionlib-msgs \
+    ros-foxy-builtin-interfaces \
+    ros-foxy-diagnostic-msgs \
+    ros-foxy-example-interfaces \
+    ros-foxy-geometry-msgs \
+    ros-foxy-libyaml-vendor \
+    ros-foxy-lifecycle-msgs \
+    ros-foxy-map-msgs \
+    ros-foxy-nav-msgs \
+    ros-foxy-pcl-msgs \
+    ros-foxy-pendulum-msgs \
+    ros-foxy-rcl \
+    ros-foxy-rcl-interfaces \
+    ros-foxy-rcl-logging-spdlog \
+    ros-foxy-rcl-yaml-param-parser \
+    ros-foxy-rcpputils \
+    ros-foxy-rcutils \
+    ros-foxy-rmw \
+    ros-foxy-rmw-dds-common \
+    ros-foxy-rmw-implementation \
     ros-foxy-ros-base \
     ros-foxy-ros-core \
+    ros-foxy-rosgraph-msgs \
+    ros-foxy-rosidl-runtime-c \
+    ros-foxy-rosidl-typesupport-c \
+    ros-foxy-sensor-msgs \
+    ros-foxy-shape-msgs \
+    ros-foxy-statistics-msgs \
+    ros-foxy-std-msgs \
+    ros-foxy-stereo-msgs \
+    ros-foxy-test-msgs \
+    ros-foxy-tf2-msgs \
+    ros-foxy-tracetools \
+    ros-foxy-trajectory-msgs \
+    ros-foxy-turtlesim \
+    ros-foxy-unique-identifier-msgs \
+    ros-foxy-visualization-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gstreamer libraries for video streaming
@@ -35,11 +71,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
-# Install MAVSDK
-RUN curl -fsSL https://github.com/mavlink/MAVSDK/releases/download/v0.34.0/mavsdk_0.34.0_ubuntu20.04_amd64.deb -o mavsdk_0.34.0_ubuntu20.04_amd64.deb \
-    && dpkg -i mavsdk_0.34.0_ubuntu20.04_amd64.deb \
-    && rm mavsdk_0.34.0_ubuntu20.04_amd64.deb
-
 # Install PX4 SITL
 RUN curl -fsSL https://github.com/tiiuae/px4-firmware/releases/download/v1.11.0-1.0.4/px4_sitl_build.tar.gz -o px4_sitl_build.tar.gz \
     && tar -xzf px4_sitl_build.tar.gz \
@@ -48,38 +79,19 @@ RUN curl -fsSL https://github.com/tiiuae/px4-firmware/releases/download/v1.11.0-
     && rm -rf px4_sitl_build/ \
     && rm px4_sitl_build.tar.gz
 
-
 ## FOG SOFTWARE
 
-# Install agent-protocol-splitter
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_02-21/agent-protocol-splitter_1.0.0.624ae07_amd64.deb -o agent-protocol-splitter_1.0.0._amd64.deb \
-    && dpkg -i agent-protocol-splitter_1.0.0._amd64.deb \
-    && rm agent-protocol-splitter_1.0.0._amd64.deb
-
-# Install latest communication-link (from container image)
-COPY --from=ghcr.io/tiiuae/tii-communication-link-deb:latest /packages/*.deb .
-RUN dpkg -i communication-link*.deb \
-    && rm communication-link*.deb
-
-# Install mavlink-router
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_02-21/mavlink-router_2.0.0.2d095f3_amd64.deb -o mavlink-router_2.0.0._amd64.deb \
-    && dpkg -i mavlink-router_2.0.0._amd64.deb \
-    && rm mavlink-router_2.0.0._amd64.deb
-
-# Install px4-mavlink-ctrl
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_02-21/ros-foxy-px4-mavlink-ctrl_0.0.0-0focal_amd64.deb -o ros-foxy-px4-mavlink-ctrl_0.0.0-0focal_amd64.deb \
-    && dpkg -i ros-foxy-px4-mavlink-ctrl_0.0.0-0focal_amd64.deb \
-    && rm ros-foxy-px4-mavlink-ctrl_0.0.0-0focal_amd64.deb
-
-# Install px4-msgs
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_02-21/ros-foxy-px4-msgs_2.0.1-0focal_amd64.deb -o ros-foxy-px4-msgs_2.0.1-0focal_amd64.deb \
-    && dpkg -i ros-foxy-px4-msgs_2.0.1-0focal_amd64.deb \
-    && rm ros-foxy-px4-msgs_2.0.1-0focal_amd64.deb
-
-# Install px4-ros-com
-RUN curl -fsSL https://github.com/tiiuae/fog_sw/releases/download/internal_rel_02-21/ros-foxy-px4-ros-com_0.1.0-0focal_amd64.deb -o ros-foxy-px4-ros-com_0.1.0-0focal_amd64.deb \
-    && dpkg -i ros-foxy-px4-ros-com_0.1.0-0focal_amd64.deb \
-    && rm ros-foxy-px4-ros-com_0.1.0-0focal_amd64.deb
+RUN echo "deb [trusted=yes] https://artifactory.ssrc.fi/artifactory/debian-public-local $(lsb_release -cs) fog-sw" > /etc/apt/sources.list.d/fogsw-latest.list
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    mavsdk \
+    communication-link \
+    ros-foxy-px4-msgs \
+    agent-protocol-splitter \
+    mavlink-router \
+    ros-foxy-px4-mavlink-ctrl \
+    ros-foxy-px4-ros-com \
+    mission-engine \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install latest mission-data-recorder
 COPY --from=ghcr.io/kulmesa/tii-mission-data-recorder:latest /build/mission-data-recorder /usr/local/bin/
