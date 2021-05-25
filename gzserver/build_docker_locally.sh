@@ -5,4 +5,4 @@ MY_PATH=`( cd "$MY_PATH" && pwd )`
 cd "$MY_PATH"
 
 eval $(minikube docker-env)
-docker build -t ghcr.io/tiiuae/tii-fog-drone:f4f .
+docker build -t ghcr.io/tiiuae/tii-gzserver .
